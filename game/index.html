@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#120c1c">
+<title>Go Forth and Break Things</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #120c1c; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; touch-action: none; }
+  #rotate { position: fixed; inset: auto 0 0 0; display: none; justify-content: center; padding: 10px; color: #ffe9a8;
+    font: 14px monospace; background: rgba(0,0,0,0.6); pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="game" width="384" height="216"></canvas>
+<div id="rotate">Turn your phone sideways for a bigger view</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

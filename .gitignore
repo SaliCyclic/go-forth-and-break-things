@@ -1,0 +1,10 @@
+# Licensed art is never committed (see CREDITS.md). Put your downloads in downloads/,
+# run tools/unpack_art.py downloads art, then tools/build_assets.py art game.
+downloads/
+art/
+game/assets/
+dist/
+icons/
+node_modules/
+*.log
+.DS_Store
