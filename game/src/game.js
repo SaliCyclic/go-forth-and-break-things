@@ -8,6 +8,10 @@ import { sfx } from './audio.js';
 
 const PHI = 2.39996323;
 const MAX_DRAWN = 90;
+// colour-independent door markers drawn on every gate sign
+const GLYPH_UP = ['...#...', '..###..', '.#####.', '#######', '..###..', '..###..', '..###..'];
+const GLYPH_X = ['##...##', '###.###', '.#####.', '..###..', '.#####.', '###.###', '##...##'];
+const GLYPH_ODD = ['.#####.', '##...##', '....##.', '...##..', '...##..', '.......', '...##..'];
 
 // generated, pixel-dithered ground strip for backdrops that have no walkable ground of their own
 const GROUNDS = [['#4b5a3c', '#3a4830', '#2c3826', '#6f7f4f'], ['#7a4a3a', '#5e3a30', '#4a2c26', '#a06a4a'],
@@ -34,9 +38,12 @@ export function groundTexture(key, bi) {
 }
 
 export class Game {
-  constructor(app, { level = 1, endless = false }) {
+  constructor(app, { level = 1, endless = false, daily = null }) {
     this.app = app; this.A = app.assets;
-    this.level = level; this.endless = endless;
+    this.level = level; this.endless = endless; this.daily = daily;
+    this.calm = !!(app.settings && app.settings.calm);
+    this.run = { gates: 0, crates: 0, bosses: 0, dodges: 0, slams: 0 };   // per-run stats, merged into the save at the end
+    this.hitstop = 0; this.slam = null; this.hint = null; this.shotPool = [];
     this.biome = endless ? 0 : biomeOf(level);
     const camp = app.save.camp;
     this.count = 5 + camp.men * 3;
@@ -65,12 +72,22 @@ export class Game {
       this.events = []; this.genD = 40; this.biomeSchedule = [];
       this.extendEndless(); this.extendEndless();
     } else {
-      this.events = buildLevel(level);
+      this.events = buildLevel(level, daily ? { seed: daily.seed, mod: daily.mod } : undefined);
+    }
+    // Rally: each consecutive loss on this level makes the next attempt a little stronger (reset on a win)
+    const rl = app.save.rally; this.rallyN = !endless && !daily && rl && rl.level === level ? Math.min(8, rl.n) : 0;
+    if (this.rallyN) { this.dmgMul *= 1 + 0.07 * this.rallyN; this.count += 2 * this.rallyN; this.peak = this.count; }
+    if (daily) {
+      const m = daily.mod;
+      if (m === 'gold') { this.coinMul *= 2; this.hpMul = 1.25; }
+      else if (m === 'swarm') this.hpMul = 0.7;
+      else if (m === 'glass') { this.dmgMul *= 1.6; this.count = Math.max(3, Math.round(this.count / 2)); this.peak = this.count; }
     }
     this.evi = 0;
     this.decorRng = mulberry32(level * 31 + 7);
     for (let x = 0; x < W + 40; x += 26) this.addDecor(x);
-    this.showBanner(endless ? 'ENDLESS!' : `LEVEL ${level}`, endless ? 'SURVIVE THE HORDE' : this.A.biomeSet(this.faction)[this.biome].name.toUpperCase(), 2.0);
+    this.showBanner(daily ? 'DAILY CHALLENGE' : endless ? 'ENDLESS!' : `LEVEL ${level}`,
+      daily ? daily.label : endless ? 'SURVIVE THE HORDE' : this.rallyN ? `RALLY: +${7 * this.rallyN}% DAMAGE, +${2 * this.rallyN} TROOPS` : this.A.biomeSet(this.faction)[this.biome].name.toUpperCase(), 2.0);
   }
 
   get diffL() { return this.endless ? 1 + this.endlessWave * 2.6 : this.level; }
@@ -111,6 +128,9 @@ export class Game {
 
   // ------- update ---------
   update(dt, input) {
+    if (this.hitstop > 0) { this.hitstop -= dt; return; }          // brief freeze-frame (boss deaths)
+    if (this.hint && this.hint.t < 1.4) dt *= 0.4;                  // first-time hints slow the action so they can be read
+    if (this.hint) { this.hint.t += dt; if (this.hint.t > this.hint.dur) this.hint = null; }
     this.t += dt;
     if (this.banner) { this.banner.t += dt; if (this.banner.t > this.banner.dur) this.banner = null; }
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 20);
@@ -159,6 +179,8 @@ export class Game {
     this.updateObjects(dt, ds);
     this.updateTraps(dt, ds);
     this.updateEnemies(dt, ds);
+    this.updateSlam(dt);
+    this.updateHints();
     this.updateWaves();
     if (this.pendingDraft !== undefined && this.pendingDraft !== null) { this.pendingDraft -= dt; if (this.pendingDraft <= 0 && this.count > 0) { this.pendingDraft = null; this.offerCards(); return; } }
 
@@ -168,7 +190,7 @@ export class Game {
   }
 
   spawn(ev) {
-    const L = this.diffL; const e = E(L) * (this.endless ? Math.pow(1.1, this.endlessWave) : 1);
+    const L = this.diffL; const e = E(L) * (this.endless ? Math.pow(1.1, this.endlessWave) : 1) * (this.hpMul || 1);
     if (ev.type === 'gate') {
       const [a, b] = ev.gates;
       this.gates.push({ x: (W + 26), sides: [{ ...a, acc: 0 }, { ...b, acc: 0 }], step: ev.step, done: false, flash: [0, 0], bump: [0, 0] });
@@ -198,7 +220,7 @@ export class Game {
       const list = BOSS_ROSTERS[this.foes][ev.mini ? 'mini' : 'boss']; const b = list[ev.boss % list.length];
       const bscale = b.scale ? b.scale * (ev.scale / (ev.mini ? 1.7 : 2.4)) : ev.scale;
       this.enemies.push({ x: (W + 26) + 40, y: LANE_MID + 12, kind: 'boss', name: b.name, sheet: b.sheet, tint: b.tint, scale: bscale, hr: this.hitR(b.sheet, bscale),
-        hp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1), maxHp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1), speed: ev.mini ? 11 : 8, power: 999, anim: 0, wave: ev.wave, hit: 0, boss: true, mini: !!ev.mini, final: !!ev.final,
+        hp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1) * (this.hpMul || 1), maxHp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1) * (this.hpMul || 1), speed: ev.mini ? 11 : 8, atkT: ev.mini ? 3.2 : 2.6, power: 999, anim: 0, wave: ev.wave, hit: 0, boss: true, mini: !!ev.mini, final: !!ev.final,
         coin: ev.mini ? 25 + Math.floor(L) : 60 + Math.floor(L * 2) });
       this.waveAlive.set(ev.wave, (this.waveAlive.get(ev.wave) || 0) + 1);
       this.showBanner(ev.mini ? 'MINI-BOSS!' : 'BOSS!', `DEFEAT ${b.name} TO WIN`, 2.0); sfx.boss(); this.shake = ev.mini ? 3 : 5;
@@ -207,9 +229,12 @@ export class Game {
     }
   }
 
-  gateStep(g, gs) { return Math.max(g.step, this.dps * 1.0) * (gs.op === 'x' ? 6 : gs.op === '/' ? 4 : 1); }
+  gateStep(g, gs) { return Math.max(g.step, this.dps * 1.0) * ({ x: 6, '/': 4, sh: 0.6, pct: 1.5 }[gs.op] || 1); }
+  static chargeable(gs) { return gs.op !== 'lv' && gs.op !== '?' && !(gs.op === 'x' && gs.val >= 4); }
+  static goodOp(op) { return op === '+' || op === 'x' || op === 'lv' || op === 'sh'; }
   chargeGate(g, i, d) {
-    const gs = g.sides[i]; gs.acc += d;
+    const gs = g.sides[i]; if (!Game.chargeable(gs)) return;
+    gs.acc += d;
     let step = this.gateStep(g, gs);
     while (gs.acc >= step) {
       gs.acc -= step;
@@ -217,6 +242,8 @@ export class Game {
       else if (gs.op === '-') { gs.val--; if (gs.val <= 0) { gs.op = '+'; gs.val = 1; } }
       else if (gs.op === 'x') { if (gs.val >= 4) { gs.acc = 0; break; } gs.val++; }
       else if (gs.op === '/') { gs.op = '+'; gs.val = 1; }
+      else if (gs.op === 'sh') gs.val += 2;
+      else if (gs.op === 'pct') { gs.val -= 5; if (gs.val <= 0) { gs.op = '+'; gs.val = 1; } }
       g.flash[i] = 0.12; g.bump[i] = 0.2; sfx.gateTick();
       step = this.gateStep(g, gs);
     }
@@ -261,8 +288,10 @@ export class Game {
       const n = w.spread || 1;
       for (let i = 0; i < n; i++) {
         const ang = n > 1 ? (i - (n - 1) / 2) * 0.16 : (Math.random() - 0.5) * 0.03;
-        this.shots.push({ x: p.x + 8, y: p.y, vx: Math.cos(ang) * w.speed, vy: Math.sin(ang) * w.speed, dmg: perArrow, kind: w.kind,
-          pierce: (w.pierce || 0) + this.pierceBonus, splash: w.splash || 0, homing: w.homing, hitSet: null, life: 2.4 });
+        const sh = this.shotPool.pop() || {};
+        sh.x = p.x + 8; sh.y = p.y; sh.vx = Math.cos(ang) * w.speed; sh.vy = Math.sin(ang) * w.speed; sh.dmg = perArrow; sh.kind = w.kind;
+        sh.pierce = (w.pierce || 0) + this.pierceBonus; sh.splash = w.splash || 0; sh.homing = w.homing; sh.hitSet = null; sh.life = 2.4;
+        this.shots.push(sh);
       }
       fired = true;
     }
@@ -270,8 +299,10 @@ export class Game {
   }
 
   updateShots(dt) {
-    const live = [];
-    for (const s of this.shots) {
+    // in-place compaction + object pool: no per-frame array or shot allocations
+    const arr = this.shots; let n = 0;
+    for (let si = 0; si < arr.length; si++) {
+      const s = arr[si];
       const px = s.x;
       if (s.homing) {
         let best = null, bd = 1e9;
@@ -280,7 +311,7 @@ export class Game {
           s.vx += (dx / m * 220 - s.vx) * Math.min(1, dt * 6); s.vy += (dy / m * 220 - s.vy) * Math.min(1, dt * 6); }
       }
       s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
-      if (s.x > W + 20 || s.x < -10 || s.y < LANE_T - 30 || s.y > H + 10 || s.life <= 0) continue;
+      if (s.x > W + 20 || s.x < -10 || s.y < LANE_T - 30 || s.y > H + 10 || s.life <= 0) { this.shotPool.push(s); continue; }
       let alive = true;
       // gates: every shot that reaches a doorway's curtain stops there and charges THAT door
       for (const g of this.gates) {
@@ -293,7 +324,7 @@ export class Game {
           alive = false; break;
         }
       }
-      if (!alive) continue;
+      if (!alive) { this.shotPool.push(s); continue; }
       for (const o of this.objects) {
         if (o.dead) continue;
         if (Math.abs(s.y - o.y) < o.w / 2 && s.x > o.x - 10 && s.x < o.x + 14) {
@@ -319,13 +350,14 @@ export class Game {
           break;
         }
       }
-      if (alive) live.push(s);
+      if (alive) arr[n++] = s; else this.shotPool.push(s);
     }
-    this.shots = live;
+    arr.length = n;
   }
 
   damageEnemy(e, d, byShot) {
     e.hp -= d; e.hit = 0.1; if (byShot) sfx.hit();
+    if (e.boss && byShot && this.t - (this.lastBuzz || 0) > 0.3) { this.lastBuzz = this.t; this.app.vibrate(12); }
     if (e.hp <= 0 && !e.dead) {
       if (this.hero.trait === 'bless' && Math.random() < 0.08 + 0.01 * this.mastery) this.shield = Math.min(60, this.shield + 1);
       if (this.hero.trait === 'leech' && !e.boss && Math.random() < 0.04 + 0.015 * this.mastery) { this.setCount(this.count + 1); if (Math.random() < 0.3) this.float(e.x, e.y - 24, '+1', '#ff8a9a'); }
@@ -334,7 +366,10 @@ export class Game {
       this.waveAlive.set(e.wave, (this.waveAlive.get(e.wave) || 1) - 1);
       if (e.boss) this.addFx('big', e.x, e.y + 4, 1); else this.addFx('puff', e.x, e.y + 2, 0.5);
       sfx.die();
-      if (e.boss) { this.shake = 6; this.flash = 0.6; this.coinFloat(e.x, e.y - 40, `+${e.coin}`); }
+      if (e.boss) {
+        this.shake = 6; this.flash = 0.6; this.coinFloat(e.x, e.y - 40, `+${e.coin}`);
+        this.hitstop = e.mini ? 0.22 : 0.4; this.slam = null; this.run.bosses++; this.app.vibrate(e.mini ? [40, 30, 60] : [60, 40, 90]);
+      }
       if (e.final && !this.endless && this.state === 'play') this.levelClear(e);
     }
   }
@@ -342,7 +377,7 @@ export class Game {
   damageObject(o, d) {
     o.hp -= d * this.siegeMul; o.hit = 0.08;
     if (o.hp <= 0 && !o.dead) {
-      o.dead = true; sfx.crate(); this.shake = 2;
+      o.dead = true; sfx.crate(); this.shake = 2; if (!o.barricade) this.run.crates++;
       this.addFx('shatter', o.x, o.y + 2, 1); this.addFx('boom', o.x, o.y - 4, 0.5);
       this.grant(o.item, o.x, o.y - 36);
     }
@@ -419,13 +454,21 @@ export class Game {
       if (!g.done && g.x <= SQUAD_X + 4) {
         g.done = true; g.passT = 0;
         const side = this.sy < LANE_MID ? 0 : 1; const gs = g.sides[side]; g.chosen = side;
-        const before = this.count;
-        if (gs.op === '+') this.setCount(this.count + gs.val + this.gateBonus); else if (gs.op === '-') this.setCount(this.count - gs.val);
-        else if (gs.op === 'x') this.setCount(this.count * gs.val); else if (gs.op === '/') this.setCount(Math.ceil(this.count / gs.val));
-        const diff = this.count - before;
-        if (diff >= 0) { sfx.gateGood(); this.float(SQUAD_X + 30, this.sy - 40, `+${diff}`, '#7dff7a'); }
-        else { sfx.gateBad(); this.float(SQUAD_X + 30, this.sy - 40, `${diff}`, '#ff5a5a'); this.shake = 3; }
-        if (diff >= 0) this.addFx('star', SQUAD_X, this.sy - 12, 1); else this.addFx('bad', SQUAD_X, this.sy - 10, 0.5);
+        const before = this.count; this.run.gates++;
+        let op = gs.op, val = gs.val, label = null;
+        if (op === '?') {   // mystery door: rolled when you walk through
+          const r = Math.random(); if (r < 0.4) { op = 'x'; val = 2; label = 'MYSTERY: x2!'; } else if (r < 0.75) { op = '+'; val = 5 + Math.floor(this.diffL / 4); label = `MYSTERY: +${val}`; }
+          else { op = 'pct'; val = 30; label = 'MYSTERY: -30%'; }
+        }
+        if (op === '+') this.setCount(this.count + val + this.gateBonus); else if (op === '-') this.setCount(this.count - val);
+        else if (op === 'x') this.setCount(this.count * val); else if (op === '/') this.setCount(Math.ceil(this.count / val));
+        else if (op === 'pct') this.setCount(this.count - Math.ceil(this.count * val / 100));
+        else if (op === 'lv') { this.wlv = Math.min(6, this.wlv + 1); label = `ATTACK LV${this.wlv}!`; }
+        else if (op === 'sh') { this.shield = Math.min(60, this.shield + val); label = `+${val} SHIELD`; }
+        const diff = this.count - before; const good = diff > 0 || (diff === 0 && (op === 'lv' || op === 'sh'));
+        if (good) { sfx.gateGood(); this.float(SQUAD_X + 30, this.sy - 40, label || `+${diff}`, '#7dff7a'); this.app.vibrate(18); }
+        else { sfx.gateBad(); this.float(SQUAD_X + 30, this.sy - 40, label || `${diff}`, '#ff5a5a'); this.shake = 3; this.app.vibrate([30, 40, 30]); }
+        if (good) this.addFx('star', SQUAD_X, this.sy - 12, 1); else this.addFx('bad', SQUAD_X, this.sy - 10, 0.5);
       }
       if (g.done) g.passT += dt;
     }
@@ -481,6 +524,15 @@ export class Game {
       if (e.dead) { e.deathT += dt; e.x -= ds; continue; }
       if (e.burn) { e.burn.t -= dt; this.damageEnemy(e, e.burn.dps * dt); if (e.burn.t <= 0) e.burn = null; else if (Math.random() < dt * 3) this.addFx('hit', e.x, e.y - 10 * e.scale, 0.35); if (e.dead) continue; }
       e.x -= ds * 0.5 + e.speed * dt;
+      if (e.boss && e.x < W - 30 && !this.slam && this.state === 'play') {
+        e.atkT -= dt;
+        if (e.atkT <= 0) {   // telegraphed slam on the half of the field the squad is standing in
+          const side = this.sy < LANE_MID ? 0 : 1;
+          this.slam = { side, t: 0, dur: e.mini ? 1.25 : 1.05, boss: e };
+          e.atkT = (e.mini ? 4.2 : 3.4) + Math.random() * 1.5; sfx.gateBad(); this.app.vibrate(10);
+          this.showHint('slam');
+        }
+      }
       if (e.x < 260) {
         const pull = Math.min(1, (260 - e.x) / 160) * (e.boss ? 14 : 26);
         e.y += Math.max(-pull, Math.min(pull, (this.sy - e.y) * 1.2)) * dt;
@@ -507,6 +559,37 @@ export class Game {
     this.enemies = this.enemies.filter(e => !e.dead || e.deathT < 0.6);
   }
 
+  updateSlam(dt) {
+    const sl = this.slam; if (!sl) return;
+    if (sl.boss.dead || this.state !== 'play') { this.slam = null; return; }
+    sl.t += dt;
+    if (sl.t >= sl.dur) {
+      const y0 = sl.side === 0 ? LANE_T : LANE_MID, y1 = sl.side === 0 ? LANE_MID : LANE_B;
+      for (let i = 0; i < 6; i++) this.addFx('smite', SQUAD_X - 10 + i * ((sl.boss.x - SQUAD_X) / 6), y0 + 8 + Math.random() * (y1 - y0 - 8), 0.8);
+      sfx.bomb(); this.shake = 7; this.run.slams++;
+      if ((this.sy < LANE_MID ? 0 : 1) === sl.side) {
+        const hit = Math.max(3, Math.ceil(this.count * (sl.boss.mini ? 0.12 : 0.2)) + Math.floor(this.diffL / 10));
+        this.loseMen(hit, SQUAD_X + 24, this.sy - 40); this.app.vibrate(80);
+      } else { this.run.dodges++; this.float(SQUAD_X + 30, this.sy - 40, 'DODGED!', '#9dd8ff'); }
+      this.slam = null;
+    }
+  }
+
+  // one-time first-run hints (stored in settings, so they show once per device)
+  showHint(key) {
+    const seen = this.app.settings.hints || (this.app.settings.hints = {});
+    if (seen[key] || this.hint || this.app.input.bot) return;
+    const T = { shoot: 'SHOOT A DOOR TO POWER IT UP', door: 'DRAG UP/DOWN: WALK THROUGH ONE DOOR', crate: 'SHOOT CRATES FOR WEAPONS & TROOPS', slam: 'BOSS SLAM! MOVE OUT OF THE RED ZONE' };
+    seen[key] = 1; this.app.persistSettings();
+    this.hint = { key, text: T[key], t: 0, dur: 3.2 };
+  }
+  updateHints() {
+    if (this.hint) return;
+    const g = this.gates.find(g => !g.done);
+    if (g && g.x < W - 30) { if (g.x - SQUAD_X > 120) this.showHint('shoot'); else this.showHint('door'); }
+    else if (this.objects.some(o => !o.dead && !o.barricade && o.x < W - 30)) this.showHint('crate');
+  }
+
   addFx(k, x, y, scale = 1) {
     if (this.fx.length > 140 && (k === 'hit' || k === 'puff')) return;
     const m = this.A.manifest.fx[k]; if (!m.total) { m.total = m.durs.reduce((a, b) => a + b, 0) / 1000; }
@@ -514,8 +597,9 @@ export class Game {
   }
   fxFrame(m, t) { let ms = t * 1000; for (let i = 0; i < m.n; i++) { ms -= m.durs[i]; if (ms < 0) return i; } return m.n - 1; }
   updateFx(dt) {
-    for (const f of this.fx) f.t += dt;
-    this.fx = this.fx.filter(f => f.t < this.A.manifest.fx[f.k].total);
+    const fx = this.fx, M = this.A.manifest.fx; let n = 0;
+    for (let i = 0; i < fx.length; i++) { const f = fx[i]; f.t += dt; if (f.t < M[f.k].total) fx[n++] = f; }
+    fx.length = n;
     for (const f of this.floats) { f.t += dt; f.y -= dt * 20; }
     this.floats = this.floats.filter(f => f.t < 1.2);
   }
@@ -530,6 +614,7 @@ export class Game {
     this.traps = []; this.shots = [];
     this.clearT = 1.8; this.slowmo = 0.7; this.wave = 3;
     this.showBanner('LEVEL CLEAR!', `${boss.name} DEFEATED`, 1.8);
+    this.app.vibrate([40, 50, 60, 50, 100]);
     this.addFx('levelup', SQUAD_X, this.sy + 4, 1);
   }
 
@@ -544,15 +629,20 @@ export class Game {
   lose() {
     if (this.state !== 'play') return;
     this.state = 'lost'; this.endTimer = 0; sfx.defeat(); this.shake = 6;
+    // every wave you cleared still pays out, so a loss always moves you forward
+    this.picked = this.coins;
+    if (!this.endless && this.wave > 0) this.bonus = this.addCoins(Math.round((12 + this.level * 2.5) * this.wave));
     this.app.onLevelEnd(this, false);
   }
 
   // simple autopilot for automated balance testing (?bot=1)
   botTarget() {
     const top = (LANE_T + LANE_MID) / 2, bot = (LANE_MID + LANE_B) / 2;
+    if (this.slam) return this.slam.side === 0 ? bot : top;
     for (const g of this.gates) {
       if (g.done || g.x > 300) continue;
-      const val = gs => gs.op === '+' ? gs.val + this.gateBonus : gs.op === '-' ? -gs.val : gs.op === 'x' ? this.count * (gs.val - 1) : -this.count / 2;
+      const val = gs => ({ '+': gs.val + this.gateBonus, '-': -gs.val, x: this.count * (gs.val - 1), '/': -this.count / 2, pct: -this.count * gs.val / 100,
+        lv: 12, sh: gs.val, '?': this.count * 0.2 })[gs.op];
       return val(g.sides[0]) >= val(g.sides[1]) ? top : bot;
     }
     for (const t of this.traps) if (t.x < SQUAD_X + 140 && t.x + t.len > SQUAD_X - 20) return t.side === 0 ? bot : top;
@@ -573,7 +663,7 @@ export class Game {
     const A = this.A;
     this.drawBackdrop(ctx);
     ctx.save();
-    if (this.shake > 0) ctx.translate(Math.round((Math.random() - 0.5) * this.shake), Math.round((Math.random() - 0.5) * this.shake));
+    if (this.shake > 0 && !this.calm) ctx.translate(Math.round((Math.random() - 0.5) * this.shake), Math.round((Math.random() - 0.5) * this.shake));
     for (const d of this.decor) if (!d.front) ctx.drawImage(d.img, Math.round(d.x), Math.round(d.y - d.img.height));
     for (const t of this.traps) {
       const tr = A.manifest.traps[t.kind]; const img = A.traps[t.kind];
@@ -583,6 +673,7 @@ export class Game {
         for (let x = t.x; x < t.x + t.len; x += 28) ctx.drawImage(img, fr * tr.fw, 0, tr.fw, tr.fh, Math.round(x), Math.round(y), tr.fw, tr.fh);
     }
     for (const g of this.gates) this.drawGate(ctx, g, 0);
+    if (this.slam) this.drawSlam(ctx);
     // depth-sorted entities
     const list = [];
     for (const o of this.objects) list.push([o.y, 0, o]);
@@ -616,8 +707,34 @@ export class Game {
       ctx.globalAlpha = 1;
     }
     ctx.restore();
-    if (this.flash > 0) { ctx.fillStyle = `rgba(255,255,230,${this.flash * 0.6})`; ctx.fillRect(0, 0, W, H); }
+    if (this.flash > 0 && !this.calm) { ctx.fillStyle = `rgba(255,255,230,${this.flash * 0.6})`; ctx.fillRect(0, 0, W, H); }
     this.drawHud(ctx);
+    if (this.hint) this.drawHint(ctx);
+  }
+
+  drawSlam(ctx) {
+    const sl = this.slam; const y0 = sl.side === 0 ? LANE_T - 4 : LANE_MID, y1 = sl.side === 0 ? LANE_MID : LANE_B + 4;
+    const x0 = 0, x1 = Math.min(W, Math.round(sl.boss.x)); const p = sl.t / sl.dur;
+    // hatched danger zone (pattern + colour, so it reads without colour too); blinks faster as the slam lands
+    const on = this.calm || Math.floor(sl.t * (6 + p * 14)) % 2 === 0;
+    ctx.fillStyle = `rgba(220,30,40,${on ? 0.4 : 0.22})`; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.fillStyle = 'rgba(255,220,220,0.35)';
+    for (let x = x0 - (y1 - y0); x < x1; x += 10) for (let k = 0; k < y1 - y0; k += 2) { const xx = x + k; if (xx >= x0 && xx < x1) ctx.fillRect(xx, y0 + k, 2, 2); }
+    // closing bar shows how long until impact
+    ctx.fillStyle = '#2a0a0e'; ctx.fillRect(x0, sl.side === 0 ? y0 : y1 - 3, x1 - x0, 3);
+    ctx.fillStyle = '#ff6060'; ctx.fillRect(x0, sl.side === 0 ? y0 : y1 - 3, Math.round((x1 - x0) * p), 3);
+    const my = Math.round((y0 + y1) / 2) - 10;
+    ctx.fillStyle = '#2a0a0e'; ctx.fillRect(SQUAD_X + 40, my - 2, 20, 22); ctx.fillStyle = '#ffd34d'; ctx.fillRect(SQUAD_X + 41, my - 1, 18, 20);
+    drawText(ctx, '!', SQUAD_X + 50, my + 2, { align: 'center', scale: 2, color: '#2a0a0e', outline: null });
+  }
+  drawHint(ctx) {
+    const h = this.hint; const a = Math.min(1, h.t * 4, (h.dur - h.t) * 3);
+    ctx.globalAlpha = Math.max(0, a);
+    const tw = h.text.length * 6 + 16, x = Math.round(W / 2 - tw / 2), y = 92;
+    hudChip(ctx, x, y, tw, 18);
+    drawText(ctx, h.text, W / 2, y + 6, { align: 'center', color: INK, outline: null });
+    ctx.fillStyle = PAL.accent; ctx.fillRect(x + 3, y + 3, 2, 12);
+    ctx.globalAlpha = 1;
   }
 
   drawBackdrop(ctx) {
@@ -657,17 +774,19 @@ export class Game {
     // pass 0: posts + curtains (behind units); pass 1: signs (on top)
     const x = Math.round(g.x);
     const COL = { good: { crystal: '#8fe8ff', glow: 'rgba(120,220,255,0.35)', a: '#5fcde4', b: '#2f6f9a', text: '#dff7ff', board: '#1f4f78' },
-                  bad:  { crystal: '#ff8f8f', glow: 'rgba(255,110,110,0.35)', a: '#e8606a', b: '#8a2532', text: '#ffe0e0', board: '#6a1a24' } };
+                  bad:  { crystal: '#ff8f8f', glow: 'rgba(255,110,110,0.35)', a: '#e8606a', b: '#8a2532', text: '#ffe0e0', board: '#6a1a24' },
+                  odd:  { crystal: '#e0b0ff', glow: 'rgba(200,140,255,0.35)', a: '#b48ae8', b: '#56307a', text: '#f4e8ff', board: '#40205a' } };
+    const pal = gs => gs.op === '?' ? COL.odd : Game.goodOp(gs.op) ? COL.good : COL.bad;
     const posts = [LANE_T - 6, LANE_MID, LANE_B + 3];
     if (pass === 0) {
-      const lc = (i) => (g.sides[i].op === '+' || g.sides[i].op === 'x') ? COL.good : COL.bad;
+      const lc = (i) => pal(g.sides[i]);
       this.drawGatePost(ctx, x + 1, posts[0], lc(0).crystal, lc(0).glow);
       const mid = Math.floor(this.t * 4) % 2 ? lc(0) : lc(1);
       this.drawGatePost(ctx, x + 1, posts[1], mid.crystal, mid.glow);
       this.drawGatePost(ctx, x + 1, posts[2], lc(1).crystal, lc(1).glow);
     }
     for (let i = 0; i < 2; i++) {
-      const gs = g.sides[i]; const good = gs.op === '+' || gs.op === 'x'; const C = good ? COL.good : COL.bad;
+      const gs = g.sides[i]; const good = Game.goodOp(gs.op); const C = pal(gs); const odd = gs.op === '?';
       const yA = posts[i], yB = posts[i + 1];
       const committed = !g.done && g.lock !== undefined && (this.sy < LANE_MID ? 0 : 1) !== i;
       const rejected = (g.done && g.chosen !== i) || committed;
@@ -678,7 +797,9 @@ export class Game {
         ctx.globalAlpha = rejected ? 0.3 * alpha : alpha;
         const ph = Math.floor(this.t * 12);
         for (let yy = top; yy < bot; yy++) for (let xx = 0; xx < cw; xx++) {
-          const band = (yy + ph) % 6; if (((xx + yy + ph) & 1) === 0 && band > 1) continue;   // dither with brighter bands crawling upward
+          // good: bright bands crawl UP; bad: diagonal hatching sliding DOWN; mystery: checker
+          const band = good ? (yy + ph) % 6 : odd ? ((xx >> 2) + (yy >> 2)) % 2 * 2 : (xx + yy - ph + 600) % 6;
+          if (((xx + yy + ph) & 1) === 0 && band > 1) continue;
           const edge = xx === 0 || xx === cw - 1;
           const sparkle = ((yy * 7 + xx * 13 + ph * 3) % 23) === 0;
           ctx.fillStyle = g.flash[i] > 0 || sparkle ? '#ffffff' : edge || band <= 1 ? C.a : C.b;
@@ -689,8 +810,9 @@ export class Game {
         ctx.globalAlpha = 1;
       } else {
         // hanging wooden sign with the value, roped to the curtain top
-        const label = gs.op === '/' ? `÷${gs.val}` : gs.op === '+' ? `+${gs.val + this.gateBonus}` : `${gs.op}${gs.val}`;
-        const tw = label.length * 12; const bw = tw + 8, bh = 20;
+        const label = { '/': `/${gs.val}`, '+': `+${gs.val + this.gateBonus}`, pct: `-${gs.val}%`, lv: '+1', sh: `+${gs.val}`, '?': '?' }[gs.op] || `${gs.op}${gs.val}`;
+        const icon = gs.op === 'lv' ? this.A.icons.star : gs.op === 'sh' ? this.A.icons.u_shield : null;
+        const tw = label.length * 12 + (icon ? 16 : 0); const bw = tw + 20, bh = 20;
         const cy = Math.round((yA + yB) / 2) - 18 - (g.bump[i] > 0.1 ? 2 : g.bump[i] > 0 ? 1 : 0); const bx = x + 1 - (bw >> 1);
         ctx.globalAlpha = alpha;
         ctx.fillStyle = '#4a3020'; ctx.fillRect(bx + 3, cy - 6, 1, 6); ctx.fillRect(bx + bw - 4, cy - 6, 1, 6);   // ropes
@@ -702,8 +824,15 @@ export class Game {
         ctx.fillStyle = C.board; ctx.fillRect(bx + 2, cy + 2, bw - 4, bh - 4);                                  // painted face
         ctx.fillStyle = '#c9b08a'; ctx.fillRect(bx + 1, cy + 1, 1, 1); ctx.fillRect(bx + bw - 2, cy + 1, 1, 1);  // nails
         ctx.fillRect(bx + 1, cy + bh - 2, 1, 1); ctx.fillRect(bx + bw - 2, cy + bh - 2, 1, 1);
-        drawText(ctx, label, x + 1, cy + 3, { align: 'center', scale: 2, color: C.text, outline: '#140c08' });
-        if (!g.done && !(gs.op === 'x' && gs.val >= 4)) {
+        drawText(ctx, label, x + 7 + (icon ? 8 : 0), cy + 3, { align: 'center', scale: 2, color: C.text, outline: '#140c08' });
+        if (icon) ctx.drawImage(icon, bx + 12, cy + 2, 16, 16);
+        // shape badge (colour-independent): up-arrow = good, X = bad, dot = mystery
+        const gx = bx + 3, gy = cy + 6;
+        const glyph = odd ? GLYPH_ODD : good ? GLYPH_UP : GLYPH_X;
+        for (let r = 0; r < 7; r++) for (let k = 0; k < 7; k++) if (glyph[r][k] === '#') { ctx.fillStyle = '#140c08'; ctx.fillRect(gx + k + 1, gy + r + 1, 1, 1); }
+        ctx.fillStyle = C.text;
+        for (let r = 0; r < 7; r++) for (let k = 0; k < 7; k++) if (glyph[r][k] === '#') ctx.fillRect(gx + k, gy + r, 1, 1);
+        if (!g.done && Game.chargeable(gs)) {
           // charge bar: fills as shots hit this door; when full the door improves
           const p = Math.min(1, gs.acc / this.gateStep(g, gs)); const pw = bw - 2;
           ctx.fillStyle = '#140c08'; ctx.fillRect(bx + 1, cy + bh + 1, pw, 3);

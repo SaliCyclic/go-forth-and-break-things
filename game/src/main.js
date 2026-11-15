@@ -1,10 +1,10 @@
 // App shell: loading, screens, input, saving, loop (MIT)
-import { W, DW, H, setW, MAX_LEVEL, CAMP, campCost, biomeOf, FACTIONS, HEROES, MASTERY_MAX, masteryCost } from './data.js';
+import { W, DW, H, setW, MAX_LEVEL, CAMP, campCost, biomeOf, FACTIONS, HEROES, MASTERY_MAX, masteryCost, dailyInfo, ACHIEVEMENTS } from './data.js';
 import { Game, groundTexture } from './game.js';
 import { campBackdrop, campProps, campFlame, campPot, campSpit, CAMP_FIRE } from './camp.js';
 import { drawText, textWidth } from './font.js';
 import { initAudio, sfx, setSfx, setMusic, playMusic } from './audio.js';
-import { UI, INK, INK_SOFT, PAL, setTheme, panel, smallTile, Button, ribbon, drawStar, drawTent, shortNum } from './ui.js';
+import { UI, INK, INK_SOFT, PAL, setTheme, panel, smallTile, Button, ribbon, drawStar, drawTent, shortNum, hudChip } from './ui.js';
 
 const params = new URLSearchParams(location.search);
 
@@ -88,7 +88,7 @@ const emptyCamp = () => Object.fromEntries(Object.keys(CAMP).map(k => [k, 0]));
 function newSave(faction) {
   const heroes = {};
   for (const id of FACTIONS[faction].heroes) heroes[id] = { u: HEROES[id].unlock === 0, m: 0 };
-  return { v: 2, faction, hero: FACTIONS[faction].heroes[0], heroes, unlocked: 1, stars: {}, coins: 0, camp: emptyCamp(), bestEndless: 0, runs: 0, created: Date.now() };
+  return { v: 2, faction, hero: FACTIONS[faction].heroes[0], heroes, unlocked: 1, stars: {}, coins: 0, camp: emptyCamp(), bestEndless: 0, runs: 0, created: Date.now(), stats: {}, ach: {}, daily: {} };
 }
 function readJSON(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function writeJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } }
@@ -96,7 +96,44 @@ function loadSlot(n) {
   const s = readJSON(SLOT_KEY(n));
   if (!s || s.v !== 2) return null;
   const base = newSave(s.faction || 'us');
-  return { ...base, ...s, camp: { ...emptyCamp(), ...(s.camp || {}) }, heroes: { ...base.heroes, ...(s.heroes || {}) } };
+  return { ...base, ...s, camp: { ...emptyCamp(), ...(s.camp || {}) }, heroes: { ...base.heroes, ...(s.heroes || {}) }, stats: { ...(s.stats || {}) }, ach: { ...(s.ach || {}) }, daily: { ...(s.daily || {}) } };
+}
+
+// ---- save codes: copy a slot as text, paste it on another device ----
+function encodeSave(save) {
+  const json = JSON.stringify(save);
+  const b64 = btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  let h = 0; for (const c of b64) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `GFBT1.${b64}.${h.toString(36)}`;
+}
+function decodeSave(code) {
+  const m = String(code || '').replace(/\s+/g, '').match(/^GFBT1\.([A-Za-z0-9_-]+)\.([a-z0-9]+)$/);
+  if (!m) return null;
+  let h = 0; for (const c of m[1]) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  if (h.toString(36) !== m[2]) return null;
+  try {
+    const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+    const s = JSON.parse(decodeURIComponent(escape(atob(b64 + '==='.slice((b64.length + 3) % 4)))));
+    return s && s.v === 2 && FACTIONS[s.faction] && HEROES[s.hero] ? s : null;
+  } catch (e) { return null; }
+}
+// small HTML dialog (works in browsers, iframes and the Android WebView, unlike prompt())
+function codeDialog({ title, text = '', button, onOk, note = '' }) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(10,6,16,.78);display:flex;align-items:center;justify-content:center;z-index:9;font:13px monospace;color:#ffe9c0';
+  wrap.innerHTML = `<div style="background:#2a1d12;border:2px solid #c8963c;padding:12px;width:min(92vw,520px);box-sizing:border-box">
+    <div style="font-weight:bold;margin-bottom:6px">${title}</div>
+    <textarea style="width:100%;height:30vh;box-sizing:border-box;font:11px monospace;background:#120c08;color:#ffe9c0;border:1px solid #6a4a2a" spellcheck="false"></textarea>
+    <div class="msg" style="min-height:16px;margin:4px 0;color:#9de39a">${note}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="ok" style="font:13px monospace;padding:6px 14px;background:#2f8a4a;color:#fff;border:0">${button}</button>
+      <button class="cancel" style="font:13px monospace;padding:6px 14px;background:#5a3a24;color:#fff;border:0">CLOSE</button></div></div>`;
+  const ta = wrap.querySelector('textarea'); ta.value = text; const msg = wrap.querySelector('.msg');
+  const close = () => { wrap.remove(); if (window.__ipp) window.__ipp.dialog = null; };
+  wrap.querySelector('.cancel').onclick = close;
+  wrap.querySelector('.ok').onclick = () => { const r = onOk(ta.value, ta); if (r === true) close(); else if (r) { msg.textContent = r; } };
+  document.body.appendChild(wrap); if (window.__ipp) window.__ipp.dialog = close;
+  setTimeout(() => { ta.focus(); if (text) ta.select(); }, 30);
 }
 function migrateV1() {
   // the first preview stored one save; move it into slot 1 as a Realm archer
@@ -113,11 +150,12 @@ class App {
     this.canvas = canvas; this.ctx = canvas.getContext('2d');
     this.ctx.imageSmoothingEnabled = false;
     migrateV1();
-    this.settings = { sfx: true, music: true, theme: 'auto', ...(readJSON(SETTINGS_KEY) || {}) };
+    this.settings = { sfx: true, music: true, theme: 'auto', vibe: true, calm: false, hints: {}, ...(readJSON(SETTINGS_KEY) || {}) };
+    this.toasts = []; this.frameN = 0; this.debug = params.has('debug') ? { u: 0, d: 0, fps: 60 } : null;
     setSfx(this.settings.sfx); setMusic(this.settings.music);
     this.slot = 0; this.save = null;
     // test/debug hooks: ?faction=them&hero=imp&camp=N builds a throwaway save in memory
-    if (params.has('faction') || params.has('level') || params.has('endless') || params.has('camp') || params.has('screen')) {
+    if (params.has('faction') || params.has('level') || params.has('endless') || params.has('camp') || params.has('screen') || params.has('daily')) {
       const f = params.get('faction') === 'them' ? 'them' : 'us';
       this.save = newSave(f);
       if (params.has('hero') && HEROES[params.get('hero')]) { this.save.hero = params.get('hero'); this.save.heroes[this.save.hero].u = true; }
@@ -137,7 +175,8 @@ class App {
     try { this.assets = await loadAssets(p => this.progress = p); Object.assign(UI, this.assets.ui); }
     catch (e) { this.error = String(e); return; }
     const lvl = +params.get('level');
-    if (params.has('endless')) this.startGame({ endless: true });
+    if (params.has('daily')) this.startGame({ daily: true });
+    else if (params.has('endless')) this.startGame({ endless: true });
     else if (lvl) this.startGame({ level: Math.max(1, Math.min(MAX_LEVEL, lvl)) });
     else if (params.has('screen')) this.go(params.get('screen'));
     else this.go('title');
@@ -153,6 +192,7 @@ class App {
     const b = {
       title: () => this.buildTitle(), slots: () => this.buildSlots(), faction: () => this.buildFaction(),
       heroes: () => this.buildHeroes(), camp: () => this.buildCamp(), levels: () => this.buildLevels(), credits: () => this.buildCredits(),
+      options: () => this.buildOptions(), records: () => this.buildRecords(),
     }[screen];
     if (b) b();
   }
@@ -164,17 +204,27 @@ class App {
   // ----- title -----
   buildTitle() {
     const cx = DW / 2;
-    const chip = (x, label, on, fn) => new Button(x, H - 20, 36, 16, label, fn, { kind: 'tile', ink: on ? INK : INK_SOFT });
     this.buttons = [
-      new Button(cx - 70, 112, 140, 22, 'PLAY', () => this.go('slots'), { style: 'go', scale: 1 }),
-      new Button(cx - 50, 140, 100, 22, 'CREDITS', () => { this.creditPage = 0; this.go('credits'); }),
-      chip(DW - 118, this.settings.sfx ? 'SFX' : 'sfx', this.settings.sfx, () => this.toggle('sfx')),
-      chip(DW - 79, this.settings.music ? 'MUS' : 'mus', this.settings.music, () => this.toggle('music')),
-      new Button(DW - 40, H - 20, 38, 16, { auto: 'AUTO', paper: 'LITE', dark: 'DARK' }[this.settings.theme], () => {
-        this.settings.theme = { auto: 'paper', paper: 'dark', dark: 'auto' }[this.settings.theme]; this.persistSettings(); this.go('title');
-      }, { kind: 'tile' }),
+      new Button(cx - 70, 110, 140, 22, 'PLAY', () => this.go('slots'), { style: 'go', scale: 1 }),
+      new Button(cx - 104, 138, 100, 22, 'OPTIONS', () => this.go('options')),
+      new Button(cx + 4, 138, 100, 22, 'CREDITS', () => { this.creditPage = 0; this.go('credits'); }),
     ];
   }
+  // ----- options -----
+  buildOptions() {
+    const S = this.settings; const cx = DW / 2;
+    const row = (i, label, value, fn) => new Button(cx - 110, 40 + i * 24, 220, 20, `${label}: ${value}`, () => { fn(); this.persistSettings(); this.go('options'); }, { kind: 'tile' });
+    this.buttons = [
+      row(0, 'SOUND', S.sfx ? 'ON' : 'OFF', () => { S.sfx = !S.sfx; setSfx(S.sfx); }),
+      row(1, 'MUSIC', S.music ? 'ON' : 'OFF', () => { S.music = !S.music; setMusic(S.music); }),
+      row(2, 'THEME', { auto: 'AUTO', paper: 'LIGHT', dark: 'DARK' }[S.theme], () => { S.theme = { auto: 'paper', paper: 'dark', dark: 'auto' }[S.theme]; }),
+      row(3, 'VIBRATION', S.vibe ? 'ON' : 'OFF', () => { S.vibe = !S.vibe; if (S.vibe) this.vibrate(30); }),
+      row(4, 'SCREEN FLASH & SHAKE', S.calm ? 'REDUCED' : 'FULL', () => { S.calm = !S.calm; }),
+      row(5, 'TUTORIAL HINTS', Object.keys(S.hints || {}).length ? 'SEEN' : 'READY', () => { S.hints = {}; }),
+      new Button(4, H - 26, 76, 22, '< BACK', () => this.go('title')),
+    ];
+  }
+  vibrate(p) { if (this.settings.vibe && !this.input.bot && navigator.vibrate) try { navigator.vibrate(p); } catch (e) { /* unsupported */ } }
   // ----- credits -----
   buildCredits() {
     const per = 6, pages = Math.ceil(CREDITS.length / per), pg = this.creditPage || 0;
@@ -212,11 +262,17 @@ class App {
         this.slot = n;
         if (s) { this.save = s; this.go('camp'); } else { this.save = null; this.go('faction'); }
       }, { kind: 'tile', extra: (ctx, bt, py) => this.drawSlotCard(ctx, bt, py, n, s) }));
-      if (s) b.push(new Button(x + 24, 170, 60, 18, this.confirmErase === n ? 'SURE?' : 'ERASE', () => {
-        if (this.confirmErase === n) { try { localStorage.removeItem(SLOT_KEY(n)); } catch (e) { /* ignore */ } this.confirmErase = 0; sfx.gateBad(); }
-        else this.confirmErase = n;
-        this.go('slots');
-      }, { kind: 'tile', ink: PAL.accent }));
+      if (s) {
+        b.push(new Button(x, 170, 52, 18, 'EXPORT', () => codeDialog({ title: `SAVE CODE - SLOT ${n}`, text: encodeSave(s), button: 'COPY',
+          note: 'Copy this code, then use IMPORT on your other device.',
+          onOk: (v, ta) => { ta.select(); try { navigator.clipboard.writeText(v).catch(() => document.execCommand('copy')); } catch (e) { try { document.execCommand('copy'); } catch (e2) { /* manual copy */ } } return 'Copied! (or select the text and copy it)'; } }), { kind: 'tile' }));
+        b.push(new Button(x + 56, 170, 52, 18, this.confirmErase === n ? 'SURE?' : 'ERASE', () => {
+          if (this.confirmErase === n) { try { localStorage.removeItem(SLOT_KEY(n)); } catch (e) { /* ignore */ } this.confirmErase = 0; sfx.gateBad(); }
+          else this.confirmErase = n;
+          this.go('slots');
+        }, { kind: 'tile', ink: PAL.accent }));
+      } else b.push(new Button(x + 24, 170, 60, 18, 'IMPORT', () => codeDialog({ title: `PASTE A SAVE CODE INTO SLOT ${n}`, button: 'LOAD',
+        onOk: v => { const sv = decodeSave(v); if (!sv) return 'That code is not valid. Check it was copied completely.'; writeJSON(SLOT_KEY(n), sv); sfx.gateGood(); this.go('slots'); return true; } }), { kind: 'tile' }));
     }
     b.push(new Button(4, H - 26, 76, 22, '< BACK', () => this.go('title')));
     this.buttons = b;
@@ -282,7 +338,7 @@ class App {
       b.push(new Button(x + 1, 166, 70, 18, max ? 'MASTERED' : `${st.u ? 'TRAIN' : 'UNLOCK'} ${shortNum(cost)}`, () => {
         if (max || this.save.coins < cost) { sfx.gateBad(); return; }
         this.save.coins -= cost; if (st.u) st.m++; else { st.u = true; this.save.hero = id; }
-        this.persist(); sfx.pickup(); this.go('heroes');
+        this.checkAch(); this.persist(); sfx.pickup(); this.go('heroes');
       }, { kind: 'tile', disabled: max || this.save.coins < cost, fill: PAL.coinFill, edgeC: PAL.coinEdge, ink: PAL.gold }));
     });
     b.push(new Button(4, H - 26, 76, 22, '< CAMP', () => this.go('camp')));
@@ -325,7 +381,7 @@ class App {
         } }));
       b.push(new Button(PX + 137, y, 47, 17, max ? 'MAX' : shortNum(cost), () => {
         if (max || this.save.coins < cost) { sfx.gateBad(); this.campSel = k; this.go('camp'); return; }
-        this.save.coins -= cost; this.save.camp[k]++; this.campSel = k; this.persist(); sfx.pickup(); this.campFlash = { k, t: this.t }; this.go('camp');
+        this.save.coins -= cost; this.save.camp[k]++; this.campSel = k; this.checkAch(); this.persist(); sfx.pickup(); this.campFlash = { k, t: this.t }; this.go('camp');
       }, { kind: 'tile', disabled: max || this.save.coins < cost, fill: PAL.coinFill, edgeC: PAL.coinEdge, ink: PAL.gold }));
     });
     const next = Math.min(this.save.unlocked, MAX_LEVEL);
@@ -333,11 +389,15 @@ class App {
     b.push(new Button(4, 28, 74, 22, 'LEVELS', () => { this.page = biomeOf(next); this.go('levels'); }));
     b.push(new Button(80, 28, 74, 22, 'ENDLESS', () => this.startGame({ endless: true })));
     b.push(new Button(4, 52, 150, 22, 'CHAMPIONS', () => this.go('heroes'), { icon: this.assets.icons.u_men }));
-    b.push(new Button(4, 76, 74, 22, '< SAVES', () => { this.save = null; this.slot = 0; this.go('slots'); }));
+    const dly = dailyInfo(); const doneToday = this.save.daily && this.save.daily.won === dly.key;
+    b.push(new Button(4, 76, 74, 22, doneToday ? 'DAILY OK' : 'DAILY', () => this.startGame({ daily: true })));
+    b.push(new Button(80, 76, 74, 22, 'RECORDS', () => { this.recPage = 0; this.go('records'); }));
+    b.push(new Button(4, 100, 74, 22, '< SAVES', () => { this.save = null; this.slot = 0; this.go('slots'); }));
     this.buttons = b;
   }
 
   startGame(opts) {
+    if (opts.daily === true) { const d = dailyInfo(); opts = { level: Math.max(3, Math.min(this.save.unlocked, MAX_LEVEL)), daily: d }; }
     initAudio();
     this.applyTheme();
     this.save.runs = (this.save.runs || 0) + 1;
@@ -362,14 +422,24 @@ class App {
 
   onLevelEnd(game, won) {
     this.save.coins += game.coins; game.banked = true;   // HUD now shows the purse alone (no double count)
-    if (game.endless) this.save.bestEndless = Math.max(this.save.bestEndless, game.endlessWave);
+    const st = this.save.stats || (this.save.stats = {}); const add = (k, v) => { st[k] = (st[k] || 0) + v; };
+    add('kills', game.kills); add(won ? 'wins' : 'losses', 1); add('gates', game.run.gates); add('crates', game.run.crates);
+    add('bosses', game.run.bosses); add('dodges', game.run.dodges); add('coins', game.coins); add('time', Math.round(game.t));
+    st.bestSquad = Math.max(st.bestSquad || 0, game.peak);
+    let dailyBonus = 0;
+    if (game.daily) {
+      if (won) { add('dailyWins', 1); if (this.save.daily.won !== game.daily.key) { dailyBonus = 100 + game.level * 8; this.save.coins += dailyBonus; this.save.daily = { won: game.daily.key }; } }
+    } else if (game.endless) this.save.bestEndless = Math.max(this.save.bestEndless, game.endlessWave);
+    else if (!won) { const rl = this.save.rally; this.save.rally = rl && rl.level === game.level ? { level: game.level, n: rl.n + 1 } : { level: game.level, n: 1 }; }
     else if (won) {
+      this.save.rally = null;
       this.save.stars[game.level] = Math.max(this.save.stars[game.level] || 0, game.stars);
       this.save.unlocked = Math.max(this.save.unlocked, Math.min(MAX_LEVEL, game.level + 1));
       if (game.level >= MAX_LEVEL) this.save.beatGame = true;
     }
+    this.checkAch();
     this.persist();
-    this.result = { won, coins: game.coins, picked: game.picked ?? game.coins, bonus: game.bonus || 0, purse: this.save.coins, level: game.level, endless: game.endless, wave: game.endlessWave, stars: game.stars, kills: game.kills, waveReached: game.wave };
+    this.result = { won, daily: !!game.daily, dailyBonus, coins: game.coins, picked: game.picked ?? game.coins, bonus: game.bonus || 0, purse: this.save.coins, level: game.level, endless: game.endless, wave: game.endlessWave, stars: game.stars, kills: game.kills, waveReached: game.wave };
     if (window.__ippResults) window.__ippResults.push({ ...this.result, count: game.count, t: game.t, cards: game.cardsTaken });
     setTimeout(() => this.showResults(), this.speed > 1 ? 50 : 1300);
   }
@@ -378,8 +448,8 @@ class App {
     this.overlay = 'results'; const r = this.result; const cx = DW / 2;
     const b = [];
     if (r.endless) b.push(new Button(cx - 112, 168, 104, 22, 'AGAIN', () => this.startGame({ endless: true }), { style: 'go' }));
-    else if (r.won && r.level < MAX_LEVEL) b.push(new Button(cx - 112, 168, 104, 22, 'NEXT', () => this.startGame({ level: r.level + 1 }), { style: 'go' }));
-    else b.push(new Button(cx - 112, 168, 104, 22, 'RETRY', () => this.startGame(this.lastOpts), { style: 'go' }));
+    else if (r.won && !r.daily && r.level < MAX_LEVEL) b.push(new Button(cx - 112, 168, 104, 22, 'NEXT', () => this.startGame({ level: r.level + 1 }), { style: 'go' }));
+    else b.push(new Button(cx - 112, 168, 104, 22, 'RETRY', () => this.startGame(r.daily ? { daily: true } : this.lastOpts), { style: 'go' }));
     b.push(new Button(cx + 8, 168, 104, 22, 'CAMP', () => this.go('camp'), { icon: this.assets.icons.u_dmg }));
     this.buttons = b;
     if (this.input.bot && params.has('chain') && r.won && !r.endless && r.level < MAX_LEVEL) setTimeout(() => this.startGame({ level: r.level + 1 }), 30);
@@ -432,7 +502,8 @@ class App {
       const k = e.key;
       if (k === 'ArrowUp' || k === 'w' || k === 'W') this.input.up = v;
       else if (k === 'ArrowDown' || k === 's' || k === 'S') this.input.down = v;
-      else if (v && (k === 'Escape' || k === 'p' || k === 'P')) { if (this.overlay === 'pause') { this.overlay = null; this.buttons = []; } else this.pause(); }
+      else if (v && k === 'Escape') this.back();
+      else if (v && (k === 'p' || k === 'P')) { if (this.overlay === 'pause') { this.overlay = null; this.buttons = []; } else this.pause(); }
       else if (v && this.overlay === 'draft' && ['1', '2', '3'].includes(k)) { const b = this.buttons[+k - 1]; if (b) b.onClick(); }
       else return;
       e.preventDefault(); initAudio();
@@ -449,7 +520,13 @@ class App {
     let last = performance.now();
     const frame = now => {
       const dt = Math.min(1 / 20, (now - last) / 1000); last = now;
-      try { this.update(dt); this.draw(); } catch (err) { this.error = err.stack || String(err); console.error(err); }
+      try {
+        const t0 = performance.now(); this.update(dt); const t1 = performance.now();
+        // menus barely move: redraw them at half rate to save battery; gameplay always draws every frame
+        const menuIdle = this.screen !== 'game' && this.screen !== 'loading' && !this.pressBtn && !this.toasts.length;
+        if (!menuIdle || (this.frameN++ & 1) === 0) this.draw();
+        if (this.debug) { const d = this.debug, t2 = performance.now(); d.u += (t1 - t0 - d.u) * 0.1; d.d += (t2 - t1 - d.d) * 0.1; d.fps += (1 / Math.max(dt, 1e-3) - d.fps) * 0.1; }
+      } catch (err) { this.error = err.stack || String(err); console.error(err); }
       requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -486,11 +563,18 @@ class App {
     } else {
       const d = { title: () => this.drawTitle(ctx), slots: () => ribbon(ctx, 'CHOOSE A SAVE', DW / 2, 10, 2),
         faction: () => ribbon(ctx, 'CHOOSE YOUR SIDE', DW / 2, 8, 2), heroes: () => this.drawHeroesHead(ctx),
-        levels: () => this.drawLevels(ctx), camp: () => this.drawCamp(ctx), credits: () => this.drawCredits(ctx) }[this.screen];
+        levels: () => this.drawLevels(ctx), camp: () => this.drawCamp(ctx), credits: () => this.drawCredits(ctx),
+        options: () => this.drawOptions(ctx), records: () => this.drawRecords(ctx) }[this.screen];
       if (d) d();
     }
     for (const b of this.buttons) b.draw(ctx, this);
     ctx.restore();
+    if (this.toasts.length) this.drawToasts(ctx);
+    if (this.debug) {
+      const g = this.game, dbg = this.debug;
+      const t = `FPS ${dbg.fps.toFixed(0)} UPD ${dbg.u.toFixed(1)}MS DRAW ${dbg.d.toFixed(1)}MS` + (this.screen === 'game' && g ? ` E${g.enemies.length} S${g.shots.length} FX${g.fx.length} P${g.shotPool.length}` : '');
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, H - 10, t.length * 6 + 4, 10); drawText(ctx, t, 2, H - 9, { color: '#7dff7a', outline: null });
+    }
   }
 
   // draw a character sheet frame with feet at (x, y)
@@ -525,7 +609,6 @@ class App {
     drawText(ctx, 'AND', DW / 2, 41 + bob, { align: 'center', scale: 2, color: INK_SOFT, outline: null });
     drawText(ctx, 'BREAK THINGS', DW / 2, 58 + bob, { align: 'center', scale: 3, color: PAL.accent, outline: null });
     drawText(ctx, 'US OR THEM? PICK A SIDE.', DW / 2, 84 + bob, { align: 'center', color: INK_SOFT, outline: null });
-    drawText(ctx, 'UI', DW - 52, H - 15, { align: 'right', color: '#fff', outline: '#000' });
   }
   drawHeroesHead(ctx) {
     ribbon(ctx, 'CHAMPIONS', DW / 2, 6, 2);
@@ -615,16 +698,75 @@ class App {
     else line(`LEVEL ${r.level}  ${r.won ? 'CLEARED' : `FELL ON WAVE ${Math.min(3, r.waveReached + 1)}/3`}`);
     line(`ENEMIES SLAIN: ${r.kills}`, INK_SOFT);
     // coin breakdown; the purse line matches the HUD counter exactly
-    if (r.bonus) line(`PICKED UP ${shortNum(r.picked)}  +  CLEAR BONUS ${shortNum(r.bonus)}`, INK_SOFT);
+    if (r.bonus) line(`PICKED UP ${shortNum(r.picked)}  +  ${r.won ? 'CLEAR' : 'WAVE'} BONUS ${shortNum(r.bonus)}`, INK_SOFT);
     else line(`PICKED UP ${shortNum(r.coins)}`, INK_SOFT);
-    { const txt = `COINS: ${r.purse}`; const tw = txt.length * 6; ctx.drawImage(this.assets.icons.coin, DW / 2 - tw / 2 - 8, y - 3, 12, 12);
+    if (r.dailyBonus) line(`DAILY REWARD +${r.dailyBonus}`, PAL.good);
+    { const txt = `COINS: ${this.save.coins}`; const tw = txt.length * 6; ctx.drawImage(this.assets.icons.coin, DW / 2 - tw / 2 - 8, y - 3, 12, 12);
       drawText(ctx, txt, DW / 2 + 7, y, { align: 'center', color: PAL.gold, outline: null }); y += 16; }
     if (!r.won) {
       const best = this.cheapestUpgrade();
       line('YOUR COINS ARE SAFE. UPGRADE AT CAMP', INK_SOFT);
+      if (!r.daily && !r.endless && this.save.rally) line(`NEXT TRY: RALLY +${7 * Math.min(8, this.save.rally.n)}% DAMAGE`, PAL.good);
       if (best) line(`NEXT: ${best.name} FOR ${shortNum(best.cost)}`, best.cost <= this.save.coins ? PAL.good : INK_SOFT);
     }
   }
+  // ----- achievements, records -----
+  checkAch() {
+    const sv = this.save; if (!sv) return; sv.ach = sv.ach || {}; sv.stats = sv.stats || {};
+    for (const a of ACHIEVEMENTS) if (!sv.ach[a.id] && a.test(sv)) {
+      sv.ach[a.id] = Date.now(); sv.coins += a.reward;
+      this.toasts.push({ text: `ACHIEVEMENT: ${a.name}`, sub: a.reward ? `+${a.reward} COINS` : a.desc, t: 0 });
+      this.vibrate([20, 30, 20]);
+    }
+  }
+  drawToasts(ctx) {
+    const tt = this.toasts[0]; if (!tt) return;
+    tt.t += 1 / 60; if (tt.t > 2.6) { this.toasts.shift(); return; }
+    const w = Math.max(tt.text.length, tt.sub.length) * 6 + 30, x = Math.round(W / 2 - w / 2), y = H - 40 + Math.round(Math.max(0, 0.25 - tt.t) * 80);
+    hudChip(ctx, x, y, w, 26); ctx.drawImage(this.assets.icons.star, x + 4, y + 5, 16, 16);
+    drawText(ctx, tt.text, x + 24, y + 4, { color: PAL.accent, outline: null });
+    drawText(ctx, tt.sub, x + 24, y + 14, { color: INK, outline: null });
+  }
+  buildRecords() {
+    this.buttons = [new Button(4, H - 26, 76, 22, '< CAMP', () => this.go('camp'))];
+  }
+  drawRecords(ctx) {
+    const sv = this.save; const st = sv.stats || {};
+    ribbon(ctx, 'RECORDS', DW / 2, 4, 2);
+    panel(ctx, 4, 28, 130, 160); panel(ctx, 138, 28, 242, 186);
+    const mins = Math.round((st.time || 0) / 60);
+    const rows = [['RUNS', sv.runs || 0], ['WINS', st.wins || 0], ['LOSSES', st.losses || 0], ['FOES SLAIN', st.kills || 0], ['BOSSES', st.bosses || 0],
+      ['GATES', st.gates || 0], ['CRATES', st.crates || 0], ['DODGES', st.dodges || 0], ['BEST ARMY', st.bestSquad || 0], ['BEST ENDLESS', sv.bestEndless || 0],
+      ['DAILY WINS', st.dailyWins || 0], ['COINS EARNED', st.coins || 0], ['PLAY TIME', mins >= 60 ? `${Math.floor(mins / 60)}H${mins % 60}M` : `${mins}M`]];
+    rows.forEach(([k, v], i) => { const y = 38 + i * 11;
+      drawText(ctx, k, 12, y, { color: INK_SOFT, outline: null }); drawText(ctx, shortNum(v), 126, y, { align: 'right', color: INK, outline: null }); });
+    const got = ACHIEVEMENTS.filter(a => sv.ach && sv.ach[a.id]).length;
+    drawText(ctx, `ACHIEVEMENTS ${got}/${ACHIEVEMENTS.length}`, 148, 36, { color: PAL.accent, outline: null });
+    ACHIEVEMENTS.forEach((a, i) => {
+      const y = 50 + i * 11; const done = sv.ach && sv.ach[a.id];
+      ctx.fillStyle = done ? PAL.good : PAL.off; ctx.fillRect(148, y, 7, 7);
+      if (done) { ctx.fillStyle = '#fff'; ctx.fillRect(150, y + 3, 1, 2); ctx.fillRect(151, y + 4, 1, 1); ctx.fillRect(152, y + 1, 1, 3); }
+      drawText(ctx, a.name, 160, y, { color: done ? INK : INK_SOFT, outline: null });
+      drawText(ctx, a.desc, 242, y, { color: INK_SOFT, outline: null });
+    });
+  }
+  drawOptions(ctx) { ribbon(ctx, 'OPTIONS', DW / 2, 8, 2); }
+
+  // Android back button / Escape: close dialog, pause, or go back one screen. Returns false only on the title screen.
+  back() {
+    if (this.dialog) { this.dialog(); return true; }
+    if (this.screen === 'game') {
+      if (this.overlay === 'pause') { this.overlay = null; this.buttons = []; }
+      else if (this.overlay === 'results') this.go('camp');
+      else if (!this.overlay) this.pause();
+      return true;
+    }
+    const to = { slots: 'title', faction: 'slots', options: 'title', credits: 'title', heroes: 'camp', levels: 'camp', records: 'camp', camp: 'slots' }[this.screen];
+    if (!to) return this.screen !== 'title';
+    if (to === 'slots' && this.screen === 'camp') { this.save = null; this.slot = 0; }
+    this.go(to); return true;
+  }
+
   cheapestUpgrade() {
     let best = null;
     for (const [k, def] of Object.entries(CAMP)) { if (this.save.camp[k] >= def.max) continue; const c = campCost(k, this.save.camp[k]); if (!best || c < best.cost) best = { name: def.name[this.fi], cost: c }; }

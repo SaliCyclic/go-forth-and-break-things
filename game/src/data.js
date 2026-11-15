@@ -90,7 +90,9 @@ export const BOSS_ROSTERS = {
            { sheet: 'huntress2', name: 'WILD ARCHER', scale: 1.5 }],
   },
 };
-export const E = L => 1 + 0.6 * (L - 1) + 0.09 * (L - 1) * (L - 1);
+// enemy strength curve: quadratic early, flattening after level 40 so the mid-game is a slope, not a wall
+export const E = L => { const k = L - 1, q = Math.min(k, 39), r = Math.max(0, k - 39);
+  return 1 + 0.6 * k + 0.09 * q * q + 7.0 * r + 0.045 * r * r; };
 export const MAX_SQUAD = 999;
 
 export function mulberry32(a) {
@@ -119,8 +121,16 @@ function gatePair(rng, L, forceGood) {
   const minus = () => ({ op: '-', val: 2 + Math.floor(rng() * (2 + L * 0.06)) + Math.floor(L * 0.04) });
   const mult = () => ({ op: 'x', val: 2 });
   const div = () => ({ op: '/', val: 2 });
-  const good = () => { const r = rng(); return r < 0.07 ? mult() : plus(); };
-  const bad = () => (rng() < 0.25 && L > 6 ? div() : minus());
+  const good = () => { const r = rng();
+    if (r < 0.07) return mult();
+    if (L >= 8 && r < 0.12) return { op: 'lv', val: 1 };                                   // attack level +1
+    if (L >= 5 && r < 0.19) return { op: 'sh', val: 4 + Math.floor(L / 6) };                // shield
+    if (L >= 4 && r < 0.25) return { op: '?', val: 0 };                                     // mystery
+    return plus(); };
+  const bad = () => { const r = rng();
+    if (L > 6 && r < 0.22) return div();
+    if (L >= 15 && r < 0.4) return { op: 'pct', val: 20 + 5 * Math.floor(rng() * 3) };      // lose a percentage
+    return minus(); };
   let a, b; const r = rng();
   if (forceGood || r < 0.5) { a = good(); b = rng() < 0.65 ? bad() : good(); }
   else { a = good(); b = good(); }
@@ -147,6 +157,7 @@ function crateItem(rng, L, lastWeapon) {
 // Build a segment (gates, crates, traps) + wave. Returns events with distance offsets.
 export function buildChunk(rng, L, waveIdx, d, opts = {}) {
   const ev = [];
+  if (opts.mod === 'gates') { ev.push({ d, type: 'gate', gates: gatePair(rng, L, true), step: E(L) * 1.6 }); d += 110; }
   const e = E(L);
   // --- pre-wave segment ---
   ev.push({ d, type: 'gate', gates: gatePair(rng, L, waveIdx === 0), step: e * 1.6 });
@@ -177,17 +188,21 @@ export function buildChunk(rng, L, waveIdx, d, opts = {}) {
     d += 110;
   }
   // --- wave ---
-  const count = Math.min(110, Math.round(7 + L * 0.55 + waveIdx * 4));
+  const count = Math.min(160, Math.round((7 + L * 0.55 + waveIdx * 4) * (opts.mod === 'swarm' ? 1.5 : 1)));
   const perRow = Math.min(6, 3 + Math.floor(L / 15));
   const rows = Math.ceil(count / perRow);
   ev.push({ d, type: 'waveStart', wave: waveIdx });
   let left = count;
+  // cap elites per wave so one unlucky roll can't turn a level into a wall
+  const cap = { brute: waveIdx + 1, heavy: Math.ceil(count * 0.12) + waveIdx }; const used = { brute: 0, heavy: 0 };
   for (let r = 0; r < rows; r++) {
     const n = Math.min(perRow, left); left -= n;
     const group = [];
     for (let i = 0; i < n; i++) {
       const x = LANE_T + 6 + (LANE_B - LANE_T - 10) * ((i + 0.5 + (rng() - 0.5) * 0.6) / n);
-      group.push({ kind: pickEnemy(rng, L), x });
+      let kind = pickEnemy(rng, L);
+      if (cap[kind] !== undefined && used[kind]++ >= cap[kind]) kind = L >= 16 ? 'tough' : 'basic';
+      group.push({ kind, x });
     }
     ev.push({ d: d + r * 22, type: 'enemies', group, wave: waveIdx });
   }
@@ -210,12 +225,44 @@ export function buildChunk(rng, L, waveIdx, d, opts = {}) {
   return { ev, d: d + 150 };
 }
 
-export function buildLevel(L) {
-  const rng = mulberry32(L * 9973 + 17);
+export function buildLevel(L, opts = {}) {
+  const rng = mulberry32(opts.seed ?? (L * 9973 + 17));
   let d = 40; const events = [];
-  for (let w = 0; w < 3; w++) { const c = buildChunk(rng, L, w, d); events.push(...c.ev); d = c.d; }
+  for (let w = 0; w < 3; w++) { const c = buildChunk(rng, L, w, d, { mod: opts.mod }); events.push(...c.ev); d = c.d; }
   return events;
 }
+
+// ---- daily challenge: same seed for everyone on a given (local) date, one mutator ----
+export const DAILY_MODS = {
+  gold:  'GOLD RUSH: x2 COINS, TOUGHER FOES',
+  swarm: 'SWARM: 50% MORE, WEAKER FOES',
+  glass: 'GLASS CANNON: HALF TROOPS, +60% DMG',
+  gates: 'GATE STORM: EXTRA GATES',
+};
+export function dailyInfo(date = new Date()) {
+  const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  let h = 2166136261; for (const c of key) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  const mods = Object.keys(DAILY_MODS); const mod = mods[h % mods.length];
+  return { key, seed: h, mod, label: DAILY_MODS[mod] };
+}
+
+// ---- achievements (checked against the save + the run that just ended) ----
+export const ACHIEVEMENTS = [
+  { id: 'first',   name: 'FIRST STEPS',   desc: 'CLEAR LEVEL 1',          reward: 50,   test: s => s.unlocked > 1 },
+  { id: 'ten',     name: 'ON THE MARCH',  desc: 'CLEAR LEVEL 10',         reward: 200,  test: s => s.unlocked > 10 },
+  { id: 'fifty',   name: 'HALFWAY THERE', desc: 'CLEAR LEVEL 50',         reward: 2000, test: s => s.unlocked > 50 },
+  { id: 'hundred', name: 'CONQUEROR',     desc: 'CLEAR LEVEL 100',        reward: 0,    test: s => !!s.beatGame },
+  { id: 'boss',    name: 'GIANT SLAYER',  desc: 'DEFEAT A BIG BOSS',      reward: 150,  test: s => s.unlocked > 5 },
+  { id: 'army100', name: 'CENTURION',     desc: 'LEAD 100 TROOPS',        reward: 150,  test: s => (s.stats.bestSquad || 0) >= 100 },
+  { id: 'army500', name: 'WARLORD',       desc: 'LEAD 500 TROOPS',        reward: 1000, test: s => (s.stats.bestSquad || 0) >= 500 },
+  { id: 'stars',   name: 'FLAWLESS',      desc: '3 STARS ON 10 LEVELS',   reward: 300,  test: s => Object.values(s.stars).filter(v => v >= 3).length >= 10 },
+  { id: 'endless', name: 'SURVIVOR',      desc: 'ENDLESS WAVE 20',        reward: 500,  test: s => s.bestEndless >= 20 },
+  { id: 'daily',   name: 'DAILY GRIND',   desc: 'WIN A DAILY CHALLENGE',  reward: 200,  test: s => (s.stats.dailyWins || 0) >= 1 },
+  { id: 'dodge',   name: 'LIGHT FEET',    desc: 'DODGE 25 BOSS SLAMS',    reward: 250,  test: s => (s.stats.dodges || 0) >= 25 },
+  { id: 'kills',   name: 'BUTCHER',       desc: 'SLAY 10,000 FOES',       reward: 800,  test: s => (s.stats.kills || 0) >= 10000 },
+  { id: 'camp',    name: 'BUILDER',       desc: '50 CAMP UPGRADES',       reward: 400,  test: s => Object.values(s.camp).reduce((a, b) => a + b, 0) >= 50 },
+  { id: 'heroes',  name: 'FULL ROSTER',   desc: 'UNLOCK ALL 5 CHAMPIONS', reward: 1000, test: s => Object.values(s.heroes).filter(h => h.u).length >= 5 },
+];
 
 // Camp: permanent upgrades bought with coins between runs (rogue-lite meta progression)
 export const CAMP = {
@@ -228,7 +275,7 @@ export const CAMP = {
   quart:  { name: ['QUARTERMASTER', 'WARCHIEF'],  desc: '+1 ATTACK LV',  icon: 'w_arrow',  max: 4,  base: 400, grow: 2.6 },
   loot:   { name: ['SCAVENGERS', 'LOOTERS'],      desc: '+10% COINS',    icon: 'coin',     max: 20, base: 80 },
 };
-export const campCost = (k, lv) => Math.round(CAMP[k].base * 1.6 * Math.pow(CAMP[k].grow || 1.45, lv));
+export const campCost = (k, lv) => Math.round(CAMP[k].base * 1.6 * Math.pow(CAMP[k].grow || 1.41, lv));
 
 // Run cards: pick 1 of 3 after each cleared wave. Effects last for the current run only.
 export const CARDS = [
