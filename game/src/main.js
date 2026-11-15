@@ -19,7 +19,7 @@ const CREDITS = [
   { what: 'CRATES, BARRELS & ROCKS: TOP DOWN BASIC', who: 'CAINOS', url: 'https://cainos.itch.io/pixel-art-top-down-basic' },
   { what: 'LIGHT THEME: PAPER UI SYSTEM', who: 'HUMBLE PIXEL', url: 'https://humblepixel.itch.io/pocket-inventory-series-5-player-status' },
   { what: 'DARK THEME: DARK AGES UI', who: 'HYPNOBIUS', url: 'https://hypnobius.itch.io/dark-ages-ui' },
-  { what: 'SPIKE & FIRE TRAPS', who: 'TRAPS PACK', lic: 'CC0' },
+  { what: 'SPIKE & FIRE TRAPS: ANIMATED TRAPS', who: 'STEALTHIX', lic: 'CC0', url: 'https://stealthix.itch.io/animated-traps' },
   { what: 'CODE, FONT, SOUND, MUSIC & CAMP SCENES', who: 'GO FORTH AND BREAK THINGS', lic: 'MIT', url: 'https://github.com/SaliCyclic/go-forth-and-break-things' },
 ];
 // open an external link: new tab in browsers; in the Android app the WebView hands it to the system browser

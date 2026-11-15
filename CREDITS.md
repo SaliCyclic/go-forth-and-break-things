@@ -13,7 +13,7 @@ Game code, the pixel font, the camp scenes (drawn in code) and all sound/music (
 | [Pixel Art Top Down – Basic](https://cainos.itch.io/pixel-art-top-down-basic) | Cainos | Use in games (credit "cainos") | Crates, barrels, rocks |
 | [Paper UI System (Humble Gift)](https://humblepixel.itch.io/pocket-inventory-series-5-player-status) | Humble Pixel | Personal & commercial use; no redistribution | Paper UI theme |
 | [Dark Ages UI](https://hypnobius.itch.io/dark-ages-ui) | Hypnobius | Use in games; no redistribution | Dark UI theme |
-| Traps | (unknown, CC0 licence file included) | CC0 | Spike & fire traps |
+| [Animated Traps](https://stealthix.itch.io/animated-traps) | Stealthix | CC0 | Spike & fire traps |
 
 The same list is shown in-game under **Title → Credits**.
 
