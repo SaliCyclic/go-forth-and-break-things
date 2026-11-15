@@ -1,6 +1,6 @@
 # Go Forth and Break Things
 
-A free pixel-art game based on those "dumb mobile game ads": your squad marches across the battlefield, picks a gate (`+5`, `x2`, `-3`…), smashes crates for upgrades, and mows down the horde. Lose often, keep your loot, upgrade camp, go forth again.
+A free pixel-art game based on those dumb mobile game ads: your squad marches across the battlefield, picks a gate (`+5`, `x2`, `-3`…), smashes crates for upgrades, and mows down the horde. Lose often, keep your loot, upgrade camp, go forth again.
 
 ## Features
 
@@ -18,7 +18,6 @@ A free pixel-art game based on those "dumb mobile game ads": your squad marches 
   - Pick 1 of 3 run boons after each wave.
 - **Saves, UI and audio:**
   - 3 save slots.
-  - Paper or dark UI theme.
   - Chiptune music and sound generated in code.
 
 ## Run it
