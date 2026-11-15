@@ -1,11 +1,32 @@
 // App shell: loading, screens, input, saving, loop (MIT)
 import { W, DW, H, setW, MAX_LEVEL, CAMP, campCost, biomeOf, FACTIONS, HEROES, MASTERY_MAX, masteryCost } from './data.js';
 import { Game, groundTexture } from './game.js';
+import { campBackdrop, campProps, campFlame, campPot, campSpit, CAMP_FIRE } from './camp.js';
 import { drawText, textWidth } from './font.js';
 import { initAudio, sfx, setSfx, setMusic, playMusic } from './audio.js';
 import { UI, INK, INK_SOFT, PAL, setTheme, panel, smallTile, Button, ribbon, drawStar, drawTent, shortNum } from './ui.js';
 
 const params = new URLSearchParams(location.search);
+
+// Art credits shown in-game (Title > Credits). Keep in sync with CREDITS.md.
+const CREDITS = [
+  { what: 'HEROES & ENEMIES: TINY RPG CHARACTERS 01-02', who: 'ZERIE', url: 'https://zerie.itch.io/tiny-rpg-character-asset-pack' },
+  { what: 'BOSSES: EVIL WIZARDS, KING, HUNTRESS...', who: 'LUIZMELO', lic: 'CC0', url: 'https://luizmelo.itch.io/' },
+  { what: 'CAMP VILLAGERS: MINIFOLKS VILLAGERS', who: 'LYASEEK', url: 'https://lyaseek.itch.io/minifvillagers' },
+  { what: 'SPELL & HIT EFFECTS: PVFX FOUNDRY', who: 'NERIJS', lic: 'CC0', url: 'https://nerijs.itch.io/pvfx-foundry' },
+  { what: 'HORDE BACKDROPS: MOUNTAIN DUSK, ROCKY PASS...', who: 'ANSIMUZ', lic: 'CC0', url: 'https://ansimuz.itch.io/' },
+  { what: 'REALM BACKDROPS & SKILL / LOOT ICONS', who: 'CRAFTPIX.NET', url: 'https://craftpix.net/freebies/' },
+  { what: 'CRATES, BARRELS & ROCKS: TOP DOWN BASIC', who: 'CAINOS', url: 'https://cainos.itch.io/pixel-art-top-down-basic' },
+  { what: 'LIGHT THEME: PAPER UI SYSTEM', who: 'HUMBLE PIXEL', url: 'https://humblepixel.itch.io/pocket-inventory-series-5-player-status' },
+  { what: 'DARK THEME: DARK AGES UI', who: 'HYPNOBIUS', url: 'https://hypnobius.itch.io/dark-ages-ui' },
+  { what: 'SPIKE & FIRE TRAPS', who: 'TRAPS PACK', lic: 'CC0' },
+  { what: 'CODE, FONT, SOUND, MUSIC & CAMP SCENES', who: 'GO FORTH AND BREAK THINGS', lic: 'MIT', url: 'https://github.com/SaliCyclic/go-forth-and-break-things' },
+];
+// open an external link: new tab in browsers; in the Android app the WebView hands it to the system browser
+function openLink(url) {
+  if (location.protocol === 'file:') { location.href = url; return; }   // Android app: MainActivity sends it to the browser
+  try { window.open(url, '_blank', 'noopener'); } catch (e) { /* popup blocked */ }
+}
 
 // ---------------- assets ----------------
 const BUNDLE = window.__BUNDLE || null;
@@ -40,8 +61,6 @@ async function loadAssets(onProgress) {
   A.villagers = {}; for (const [k, v] of Object.entries(manifest.villagers)) L(v.src, i => A.villagers[k] = i);
   L(manifest.arrow, i => A.arrow = i);
   A.arrows = {}; for (const [k, v] of Object.entries(manifest.arrows)) L(v, i => A.arrows[k] = i);
-  A.camp = {}; for (const [k, v] of Object.entries(manifest.camp)) L(v, i => A.camp[k] = i);
-  A.campAnim = {}; for (const [k, v] of Object.entries(manifest.campAnim)) L(v.src, i => A.campAnim[k] = i);
   manifest.biomes.forEach((b, bi) => {
     A.biomes[bi] = { name: b.name, layers: b.layers.map(l => ({ speed: l.speed, img: null })) };
     b.layers.forEach((l, li) => L(l.src, i => A.biomes[bi].layers[li].img = i));
@@ -133,7 +152,7 @@ class App {
     this.applyTheme();
     const b = {
       title: () => this.buildTitle(), slots: () => this.buildSlots(), faction: () => this.buildFaction(),
-      heroes: () => this.buildHeroes(), camp: () => this.buildCamp(), levels: () => this.buildLevels(),
+      heroes: () => this.buildHeroes(), camp: () => this.buildCamp(), levels: () => this.buildLevels(), credits: () => this.buildCredits(),
     }[screen];
     if (b) b();
   }
@@ -148,12 +167,35 @@ class App {
     const chip = (x, label, on, fn) => new Button(x, H - 20, 36, 16, label, fn, { kind: 'tile', ink: on ? INK : INK_SOFT });
     this.buttons = [
       new Button(cx - 70, 112, 140, 22, 'PLAY', () => this.go('slots'), { style: 'go', scale: 1 }),
+      new Button(cx - 50, 140, 100, 22, 'CREDITS', () => { this.creditPage = 0; this.go('credits'); }),
       chip(DW - 118, this.settings.sfx ? 'SFX' : 'sfx', this.settings.sfx, () => this.toggle('sfx')),
       chip(DW - 79, this.settings.music ? 'MUS' : 'mus', this.settings.music, () => this.toggle('music')),
       new Button(DW - 40, H - 20, 38, 16, { auto: 'AUTO', paper: 'LITE', dark: 'DARK' }[this.settings.theme], () => {
         this.settings.theme = { auto: 'paper', paper: 'dark', dark: 'auto' }[this.settings.theme]; this.persistSettings(); this.go('title');
       }, { kind: 'tile' }),
     ];
+  }
+  // ----- credits -----
+  buildCredits() {
+    const per = 6, pages = Math.ceil(CREDITS.length / per), pg = this.creditPage || 0;
+    const b = [new Button(4, H - 26, 76, 22, '< BACK', () => this.go('title'))];
+    CREDITS.slice(pg * per, pg * per + per).forEach((c, i) => {
+      if (c.url) b.push(new Button(DW - 64, 36 + i * 24, 50, 18, 'VISIT', () => openLink(c.url), { kind: 'tile' }));
+    });
+    if (pages > 1) b.push(new Button(DW - 80, H - 26, 76, 22, pg + 1 < pages ? 'MORE >' : '< FIRST', () => { this.creditPage = (pg + 1) % pages; this.go('credits'); }));
+    this.buttons = b;
+  }
+  drawCredits(ctx) {
+    const per = 6, pg = this.creditPage || 0;
+    ribbon(ctx, 'CREDITS', DW / 2, 6, 2);
+    panel(ctx, 6, 30, DW - 12, 152);
+    CREDITS.slice(pg * per, pg * per + per).forEach((c, i) => {
+      const y = 38 + i * 24;
+      drawText(ctx, c.what, 22, y, { color: INK, outline: null });
+      drawText(ctx, c.who + (c.lic ? '  (' + c.lic + ')' : ''), 22, y + 9, { color: c.url ? PAL.accent : INK_SOFT, outline: null });
+      if (i < per - 1) { ctx.fillStyle = PAL.edge; ctx.globalAlpha = 0.25; ctx.fillRect(14, y + 19, DW - 28, 1); ctx.globalAlpha = 1; }
+    });
+    drawText(ctx, `${pg + 1}/${Math.ceil(CREDITS.length / per)}`, DW / 2, H - 17, { align: 'center', color: '#fff', outline: '#000' });
   }
   toggle(k) {
     this.settings[k] = !this.settings[k]; this.persistSettings();
@@ -319,7 +361,7 @@ class App {
   }
 
   onLevelEnd(game, won) {
-    this.save.coins += game.coins;
+    this.save.coins += game.coins; game.banked = true;   // HUD now shows the purse alone (no double count)
     if (game.endless) this.save.bestEndless = Math.max(this.save.bestEndless, game.endlessWave);
     else if (won) {
       this.save.stars[game.level] = Math.max(this.save.stars[game.level] || 0, game.stars);
@@ -327,7 +369,7 @@ class App {
       if (game.level >= MAX_LEVEL) this.save.beatGame = true;
     }
     this.persist();
-    this.result = { won, coins: game.coins, level: game.level, endless: game.endless, wave: game.endlessWave, stars: game.stars, kills: game.kills, waveReached: game.wave };
+    this.result = { won, coins: game.coins, picked: game.picked ?? game.coins, bonus: game.bonus || 0, purse: this.save.coins, level: game.level, endless: game.endless, wave: game.endlessWave, stars: game.stars, kills: game.kills, waveReached: game.wave };
     if (window.__ippResults) window.__ippResults.push({ ...this.result, count: game.count, t: game.t, cards: game.cardsTaken });
     setTimeout(() => this.showResults(), this.speed > 1 ? 50 : 1300);
   }
@@ -429,7 +471,7 @@ class App {
       ctx.fillStyle = '#4a3420'; ctx.fillRect(W / 2 - 60, H / 2 + 2, 120, 6); ctx.fillStyle = '#e8a020'; ctx.fillRect(W / 2 - 60, H / 2 + 2, 120 * this.progress, 6);
       return;
     }
-    if (this.screen === 'game') this.game.draw(ctx); else this.drawMenuBackdrop(ctx);
+    if (this.screen === 'game') this.game.draw(ctx); else if (this.screen === 'camp') ctx.drawImage(campBackdrop(W, this.save.faction === 'them'), 0, 0); else this.drawMenuBackdrop(ctx);
     ctx.save(); if (this.inDesignSpace()) ctx.translate(this.ox, 0);
     if (this.screen === 'game') {
       if (this.overlay === 'pause') {
@@ -444,7 +486,7 @@ class App {
     } else {
       const d = { title: () => this.drawTitle(ctx), slots: () => ribbon(ctx, 'CHOOSE A SAVE', DW / 2, 10, 2),
         faction: () => ribbon(ctx, 'CHOOSE YOUR SIDE', DW / 2, 8, 2), heroes: () => this.drawHeroesHead(ctx),
-        levels: () => this.drawLevels(ctx), camp: () => this.drawCamp(ctx) }[this.screen];
+        levels: () => this.drawLevels(ctx), camp: () => this.drawCamp(ctx), credits: () => this.drawCredits(ctx) }[this.screen];
       if (d) d();
     }
     for (const b of this.buttons) b.draw(ctx, this);
@@ -495,11 +537,7 @@ class App {
     drawText(ctx, `LEVELS ${this.page * 20 + 1}-${this.page * 20 + 20}    B = BOSS LEVEL`, DW / 2, 50, { align: 'center', color: INK_SOFT, outline: null });
     drawText(ctx, `${this.page + 1}/5`, DW / 2, H - 17, { align: 'center', color: '#fff', outline: '#000' });
   }
-  campAnim(ctx, k, cx, bottom, phase = 0) {
-    const m = this.assets.manifest.campAnim[k]; const img = this.assets.campAnim[k];
-    const f = Math.floor(this.t * 10 + phase) % m.n;
-    ctx.drawImage(img, f * m.fw, 0, m.fw, m.fh, Math.round(cx - m.fw / 2), Math.round(bottom - m.fh), m.fw, m.fh);
-  }
+
   // soft fire glow: concentric dithered ellipses (pixel-art friendly), cached per colour/size/flicker step
   glow(ctx, cx, cy, rx, ry, rgb) {
     this.glowCache = this.glowCache || {};
@@ -521,28 +559,33 @@ class App {
   }
   drawCamp(ctx) {
     const A = this.assets; const t = this.t; const them = this.save.faction === 'them';
-    const C = (k, x, bottom) => { const im = A.camp[k]; ctx.drawImage(im, Math.round(x), Math.round(bottom - im.height)); };
     const hero = this.hero();
-    const wander = (k, x, y, i, span = 14) => {
-      const ph = (t * 0.2 + i * 0.37) % 2; const walking = (ph % 1) < 0.4; const pos = Math.min(1, (ph % 1) / 0.4); const dir = ph < 1 ? 1 : -1;
-      this.drawChar(ctx, k, walking ? 'walk' : 'idle', x + (dir > 0 ? pos : 1 - pos) * span - span / 2, y, { flip: walking ? dir < 0 : i % 2 === 1, phase: i });
+    const F = CAMP_FIRE;
+    // a walker pacing between two points, pausing at each end
+    const pace = (k, x0, x1, y, i, sp = 0.12) => {
+      const ph = (t * sp + i * 0.31) % 2; const leg = ph % 1; const walking = leg < 0.7; const p = Math.min(1, leg / 0.7);
+      const fwd = ph < 1; const x = fwd ? x0 + (x1 - x0) * p : x1 + (x0 - x1) * p;
+      this.drawChar(ctx, k, walking ? 'walk' : 'emote', x, y, { flip: (x1 > x0) !== fwd, phase: i, speed: walking ? 8 : 4 });
     };
+    ctx.drawImage(campProps(them), 0, 0);
     if (!them) {
-      // Realm base camp: two tents, a practice target, the campfire and a couple of villagers
-      C('officer_tent_0', 104, 188); C('bell_tent_0', 6, 180);
-      C('archery_target_0', 160, 212);
-      this.glow(ctx, 92, 198, 30, 17, '255,180,80');
-      this.campAnim(ctx, 'campfire_0', 92, 208);
-      this.drawChar(ctx, 'archer', 'atk1', 126, 206, { speed: 9 });
-      wander('v_villagerman', 60, 202, 0); wander('v_oldwoman', 116, 214, 1);
+      // villagers going about camp life
+      pace('v_villagerwoman', 46, 128, 186, 0);                                   // fetching water between the tents
+      this.glow(ctx, F.x, F.y - 4, 30, 16, '255,180,80');
+      campFlame(ctx, F.x, F.y, t); campPot(ctx);
+      this.drawChar(ctx, 'v_oldwoman', 'emote', F.x + 15, F.y + 6, { flip: true, speed: 3 });   // stirring the pot
+      this.drawChar(ctx, 'v_villagerman', 'idle', 70, 200, { speed: 4 });                      // resting on the log seat
+      this.drawChar(ctx, 'v_peasant', 'atk1', 140, 206, { speed: 5 });                         // splitting wood at the stump
+      this.drawChar(ctx, 'archer', 'atk1', 152, 214, { speed: 7, phase: 2 });                  // target practice
+      this.drawChar(ctx, 'v_oldman', 'idle', 96, 214, { flip: true, speed: 3, phase: 1 });     // warming his hands
     } else {
-      // Horde war camp: palisade, yurt + tepee, roasting boar, one brazier and a couple of brutes
-      for (let x = 0; x < 190; x += 7) { const h = 24 + ((x * 7) % 9); ctx.fillStyle = '#3a2418'; ctx.fillRect(x, 154 - h, 6, h); ctx.fillStyle = '#5a3a24'; ctx.fillRect(x + 1, 154 - h, 2, h); ctx.fillStyle = '#2a180e'; ctx.fillRect(x + 2, 154 - h - 3, 2, 3); }
-      C('yurt_1', 104, 186); C('tepee_painted_0', 8, 182);
-      this.glow(ctx, 172, 192, 16, 12, '255,120,50'); this.campAnim(ctx, 'brazier_stand_1', 172, 214, 2);
-      this.glow(ctx, 92, 198, 30, 17, '255,110,50');
-      this.campAnim(ctx, 'spit_roast_boar_0', 92, 210);
-      wander('orc', 58, 202, 0); wander('skeleton', 132, 212, 1);
+      pace('armored_orc', 44, 124, 186, 0, 0.1);                                   // patrolling the palisade
+      this.glow(ctx, F.x, F.y - 4, 30, 16, '255,110,50');
+      campFlame(ctx, F.x, F.y, t); campSpit(ctx, t);
+      this.drawChar(ctx, 'skeleton', 'idle', F.x + 21, F.y + 4, { flip: true, speed: 4 });     // minding the roast
+      this.drawChar(ctx, 'orc', 'idle', 72, 202, { speed: 4, phase: 2 });                      // sat on the log, waiting for dinner
+      this.drawChar(ctx, 'orc', 'atk1', 154, 213, { speed: 6 });                               // beating up the dummy
+      this.drawChar(ctx, 'bat', 'idle', 108, 128 + Math.round(Math.sin(t * 3) * 2), { speed: 8 }); // roosting near the totem
     }
     this.drawChar(ctx, hero.sheet, 'idle', 22, 214, {});  // your current champion
     // ledger
@@ -571,8 +614,11 @@ class App {
     if (r.endless) { line(`WAVES SURVIVED: ${r.wave}`); line(`BEST: ${this.save.bestEndless}`, PAL.accent); }
     else line(`LEVEL ${r.level}  ${r.won ? 'CLEARED' : `FELL ON WAVE ${Math.min(3, r.waveReached + 1)}/3`}`);
     line(`ENEMIES SLAIN: ${r.kills}`, INK_SOFT);
-    ctx.drawImage(this.assets.icons.coin, DW / 2 - 34, y - 3, 12, 12);
-    drawText(ctx, `+${r.coins} KEPT`, DW / 2 - 18, y, { color: PAL.gold, outline: null }); y += 16;
+    // coin breakdown; the purse line matches the HUD counter exactly
+    if (r.bonus) line(`PICKED UP ${shortNum(r.picked)}  +  CLEAR BONUS ${shortNum(r.bonus)}`, INK_SOFT);
+    else line(`PICKED UP ${shortNum(r.coins)}`, INK_SOFT);
+    { const txt = `COINS: ${r.purse}`; const tw = txt.length * 6; ctx.drawImage(this.assets.icons.coin, DW / 2 - tw / 2 - 8, y - 3, 12, 12);
+      drawText(ctx, txt, DW / 2 + 7, y, { align: 'center', color: PAL.gold, outline: null }); y += 16; }
     if (!r.won) {
       const best = this.cheapestUpgrade();
       line('YOUR COINS ARE SAFE. UPGRADE AT CAMP', INK_SOFT);

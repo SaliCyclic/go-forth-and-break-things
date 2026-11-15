@@ -538,7 +538,7 @@ export class Game {
     this.state = 'won'; this.endTimer = 0; sfx.win();
     const ratio = this.count / Math.max(1, this.peak);
     this.stars = ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1;
-    this.addCoins(20 + this.level * 4 + this.stars * 5);
+    this.picked = this.coins; this.bonus = this.addCoins(20 + this.level * 4 + this.stars * 5);
     this.app.onLevelEnd(this, true);
   }
   lose() {
@@ -871,7 +871,7 @@ export class Game {
     drawText(ctx, this.endless ? `ENDLESS  WAVE ${this.endlessWave + 1}` : `LEVEL ${this.level}`, 4, 3, { color: INK, outline: null });
     if (!this.endless) this.drawProgress(ctx);
     ctx.drawImage(A.icons.coin, W - 82, 1, 11, 11);
-    drawText(ctx, this.app.save.coins + this.coins, W - 68, 3, { color: PAL.gold, outline: null });
+    drawText(ctx, this.app.save.coins + (this.banked ? 0 : this.coins), W - 68, 3, { color: PAL.gold, outline: null });
     ctx.fillStyle = PAL.tagFill; ctx.fillRect(W - 18, 1, 17, 11); ctx.fillStyle = PAL.tagText; ctx.fillRect(W - 13, 3, 2, 7); ctx.fillRect(W - 8, 3, 2, 7);
     const boss = this.enemies.find(e => e.boss && !e.dead);
     if (boss) {

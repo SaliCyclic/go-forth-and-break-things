@@ -2,7 +2,7 @@
 """Bundle game/ into one self-contained HTML file (inlined JS + data-URI assets)."""
 import sys, os, re, json, base64
 G, OUT = sys.argv[1], sys.argv[2]
-order = ['font', 'audio', 'data', 'ui', 'game', 'main']
+order = ['font', 'audio', 'data', 'ui', 'game', 'camp', 'main']
 js = []
 names = {}
 for m in order:

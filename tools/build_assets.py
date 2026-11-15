@@ -265,19 +265,7 @@ for key, (d, files) in BIG.items():
     ax = (ib[0] + ib[2]) // 2 - xs0; ay = ib[3] - ys0
     manifest['chars'][key] = {'src': save(sheet, f'chars/{key}.png'), 'fw': cw, 'fh': ch, 'ax': ax, 'ay': ay, 'anims': anims, 'big': True}
 
-# ---------- camp props (Adventurer's Camp) ----------
-CP = ROOT + '/raw4/more2/x/camp-v11/camp/assets/'
-manifest['camp'] = {}
-for k in ['pavilion_tent_0', 'pavilion_tent_1', 'big_tent_0', 'officer_tent_0', 'bell_tent_0', 'tent_1', 'supply_tent_0', 'tepee_painted_0', 'tepee_painted_1',
-          'yurt_1', 'patched_tent_0', 'hunting_lodge_1', 'covered_wagon_0', 'supply_wagon_0']:
-    manifest['camp'][k] = save(Image.open(CP + 'tents/' + k + '.png').convert('RGBA'), f'camp/{k}.png')
-for k in ['archery_target_0', 'barrels_0', 'supply_crates_0', 'weapon_rack_0', 'stacked_shields_0', 'log_seat_0', 'ammo_crates_0', 'hide_frame_0',
-          'trophy_rack_0', 'trophy_rack_1', 'firewood_0', 'signpost_0', 'sentry_box_0', 'notice_board_0', 'hide_rack_1', 'log_pile_axe_0']:
-    manifest['camp'][k] = save(Image.open(CP + 'props/' + k + '.png').convert('RGBA'), f'camp/{k}.png')
-manifest['campAnim'] = {}
-for k in ['campfire_0', 'campfire_2', 'brazier_stand_0', 'brazier_stand_1', 'flag_0', 'flag_1', 'spit_roast_boar_0', 'smoke_signal_fire_1', 'lantern_0']:
-    im = Image.open(CP + 'animations/' + k + '_anim.png').convert('RGBA')
-    manifest['campAnim'][k] = {'src': save(im, f'camp/{k}_anim.png'), 'fw': im.width // 8, 'fh': im.height, 'n': 8}
+# (camp scenes are drawn in code: game/src/camp.js)
 
 with open(os.path.join(A, 'manifest.json'), 'w') as f: json.dump(manifest, f, indent=1)
 print('ok', sum(len(fs) for _, _, fs in os.walk(A)), 'files')
