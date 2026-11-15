@@ -1,5 +1,8 @@
 // Go Forth and Break Things — game data + level generation (MIT)
-export const W = 384, H = 216;
+// Logical screen: height is fixed at 216; width adapts to the device aspect (384 = 16:9 ... 520 ≈ 21:9).
+export let W = 384; export const H = 216;
+export const DW = 384;                       // design width for menus (centred on wider screens)
+export function setW(w) { W = w; }
 // battlefield band (lateral axis is screen Y; progress axis is screen X, right to left)
 export const LANE_T = 122, LANE_B = 208, LANE_MID = 165;
 export const SQUAD_X = 70;

@@ -8,7 +8,6 @@ import { sfx } from './audio.js';
 
 const PHI = 2.39996323;
 const MAX_DRAWN = 90;
-const SPAWN_X = W + 26;
 
 // generated, pixel-dithered ground strip for backdrops that have no walkable ground of their own
 const GROUNDS = [['#4b5a3c', '#3a4830', '#2c3826', '#6f7f4f'], ['#7a4a3a', '#5e3a30', '#4a2c26', '#a06a4a'],
@@ -172,17 +171,17 @@ export class Game {
     const L = this.diffL; const e = E(L) * (this.endless ? Math.pow(1.1, this.endlessWave) : 1);
     if (ev.type === 'gate') {
       const [a, b] = ev.gates;
-      this.gates.push({ x: SPAWN_X, sides: [{ ...a, acc: 0 }, { ...b, acc: 0 }], step: ev.step, done: false, flash: [0, 0] });
+      this.gates.push({ x: (W + 26), sides: [{ ...a, acc: 0 }, { ...b, acc: 0 }], step: ev.step, done: false, flash: [0, 0], bump: [0, 0] });
     } else if (ev.type === 'crate') {
       const it = ev.item;
       const img = it.kind === 'weapon' ? 'chest' : it.kind === 'men' ? 'crate_big' : 'barrel';
-      this.objects.push({ x: SPAWN_X, y: ev.x, hp: ev.hp, maxHp: ev.hp, item: it, img, w: 28, hit: 0 });
+      this.objects.push({ x: (W + 26), y: ev.x, hp: ev.hp, maxHp: ev.hp, item: it, img, w: 28, hit: 0 });
     } else if (ev.type === 'barricade') {
       const imgs = this.biome >= 3 ? ['tomb', 'cross', 'stele'] : ['stele', 'tomb', 'pillar_broken'];
       const img = imgs[Math.floor(this.decorRng() * imgs.length)];
-      this.objects.push({ x: SPAWN_X, y: ev.x, hp: ev.hp, maxHp: ev.hp, item: { kind: 'coins', val: 5 + Math.floor(L / 3) }, img, w: 24, hit: 0, barricade: true });
+      this.objects.push({ x: (W + 26), y: ev.x, hp: ev.hp, maxHp: ev.hp, item: { kind: 'coins', val: 5 + Math.floor(L / 3) }, img, w: 24, hit: 0, barricade: true });
     } else if (ev.type === 'trap') {
-      this.traps.push({ x: SPAWN_X, side: ev.side, kind: ev.kind, t: 0, acc: 0, len: 110 });
+      this.traps.push({ x: (W + 26), side: ev.side, kind: ev.kind, t: 0, acc: 0, len: 110 });
     } else if (ev.type === 'waveStart') {
       this.waveSpawning.add(ev.wave); if (!this.waveAlive.has(ev.wave)) this.waveAlive.set(ev.wave, 0);
       const n = ev.wave + 1;
@@ -191,20 +190,35 @@ export class Game {
       for (const g of ev.group) {
         const def = TIERS[g.kind]; const ros = ROSTERS[this.foes][g.kind]; const hp = def.hp * e;
         const sheet = ros.alt && Math.random() < 0.5 ? ros.alt : ros.sheet; const sc = def.scale * (ros.scale || 1);
-        this.enemies.push({ x: SPAWN_X + Math.random() * 10, y: g.x, kind: g.kind, sheet, tint: ros.tint, scale: sc, hr: this.hitR(sheet, sc),
+        this.enemies.push({ x: (W + 26) + Math.random() * 10, y: g.x, kind: g.kind, sheet, tint: ros.tint, scale: sc, hr: this.hitR(sheet, sc),
           hp, maxHp: hp, speed: def.speed * (0.9 + Math.random() * 0.2) * (1 + Math.min(0.6, L / 160)), power: Math.round(def.power * (1 + L / 30)), anim: Math.random() * 10, wave: ev.wave, hit: 0, coin: def.coin });
         this.waveAlive.set(ev.wave, (this.waveAlive.get(ev.wave) || 0) + 1);
       }
     } else if (ev.type === 'boss') {
       const list = BOSS_ROSTERS[this.foes][ev.mini ? 'mini' : 'boss']; const b = list[ev.boss % list.length];
       const bscale = b.scale ? b.scale * (ev.scale / (ev.mini ? 1.7 : 2.4)) : ev.scale;
-      this.enemies.push({ x: SPAWN_X + 40, y: LANE_MID + 12, kind: 'boss', name: b.name, sheet: b.sheet, tint: b.tint, scale: bscale, hr: this.hitR(b.sheet, bscale),
+      this.enemies.push({ x: (W + 26) + 40, y: LANE_MID + 12, kind: 'boss', name: b.name, sheet: b.sheet, tint: b.tint, scale: bscale, hr: this.hitR(b.sheet, bscale),
         hp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1), maxHp: ev.hp * (this.endless ? Math.pow(1.1, this.endlessWave) : 1), speed: ev.mini ? 11 : 8, power: 999, anim: 0, wave: ev.wave, hit: 0, boss: true, mini: !!ev.mini, final: !!ev.final,
         coin: ev.mini ? 25 + Math.floor(L) : 60 + Math.floor(L * 2) });
       this.waveAlive.set(ev.wave, (this.waveAlive.get(ev.wave) || 0) + 1);
       this.showBanner(ev.mini ? 'MINI-BOSS!' : 'BOSS!', `DEFEAT ${b.name} TO WIN`, 2.0); sfx.boss(); this.shake = ev.mini ? 3 : 5;
     } else if (ev.type === 'waveEnd') {
       this.waveSpawning.delete(ev.wave);
+    }
+  }
+
+  gateStep(g, gs) { return Math.max(g.step, this.dps * 1.0) * (gs.op === 'x' ? 6 : gs.op === '/' ? 4 : 1); }
+  chargeGate(g, i, d) {
+    const gs = g.sides[i]; gs.acc += d;
+    let step = this.gateStep(g, gs);
+    while (gs.acc >= step) {
+      gs.acc -= step;
+      if (gs.op === '+') gs.val++;
+      else if (gs.op === '-') { gs.val--; if (gs.val <= 0) { gs.op = '+'; gs.val = 1; } }
+      else if (gs.op === 'x') { if (gs.val >= 4) { gs.acc = 0; break; } gs.val++; }
+      else if (gs.op === '/') { gs.op = '+'; gs.val = 1; }
+      g.flash[i] = 0.12; g.bump[i] = 0.2; sfx.gateTick();
+      step = this.gateStep(g, gs);
     }
   }
 
@@ -268,22 +282,18 @@ export class Game {
       s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
       if (s.x > W + 20 || s.x < -10 || s.y < LANE_T - 30 || s.y > H + 10 || s.life <= 0) continue;
       let alive = true;
+      // gates: every shot that reaches a doorway's curtain stops there and charges THAT door
       for (const g of this.gates) {
         if (g.done) continue;
-        const gl = g.x - 6;
-        if (px <= gl && s.x > gl) {
-          const side = this.sy < LANE_MID ? 0 : 1; const gs = g.sides[side];
-          if ((s.y < LANE_MID ? 0 : 1) === side && (gs.op === '+' || gs.op === '-')) {
-            gs.acc += s.dmg;
-            const step = Math.max(g.step, this.dps * 2);
-            while (gs.acc >= step) {
-              gs.acc -= step;
-              if (gs.op === '+') gs.val++; else { gs.val--; if (gs.val <= 0) { gs.op = '+'; gs.val = 1; } }
-              g.flash[side] = 0.12; sfx.gateTick();
-            }
-          }
+        const cx = g.x - 7;
+        if (s.x >= cx && px < cx + 16) {
+          const i = s.y < LANE_MID ? 0 : 1;
+          this.chargeGate(g, i, s.dmg);
+          if (Math.random() < 0.35) this.addFx('hit', cx + 2, s.y - 10, 0.35);
+          alive = false; break;
         }
       }
+      if (!alive) continue;
       for (const o of this.objects) {
         if (o.dead) continue;
         if (Math.abs(s.y - o.y) < o.w / 2 && s.x > o.x - 10 && s.x < o.x + 14) {
@@ -405,7 +415,7 @@ export class Game {
   // ------- world objects ---------
   updateGates(dt, ds) {
     for (const g of this.gates) {
-      g.x -= ds; g.flash[0] = Math.max(0, g.flash[0] - dt); g.flash[1] = Math.max(0, g.flash[1] - dt);
+      g.x -= ds; g.flash[0] = Math.max(0, g.flash[0] - dt); g.flash[1] = Math.max(0, g.flash[1] - dt); g.bump[0] = Math.max(0, g.bump[0] - dt); g.bump[1] = Math.max(0, g.bump[1] - dt);
       if (!g.done && g.x <= SQUAD_X + 4) {
         g.done = true; g.passT = 0;
         const side = this.sy < LANE_MID ? 0 : 1; const gs = g.sides[side]; g.chosen = side;
@@ -681,7 +691,7 @@ export class Game {
         // hanging wooden sign with the value, roped to the curtain top
         const label = gs.op === '/' ? `÷${gs.val}` : gs.op === '+' ? `+${gs.val + this.gateBonus}` : `${gs.op}${gs.val}`;
         const tw = label.length * 12; const bw = tw + 8, bh = 20;
-        const cy = Math.round((yA + yB) / 2) - 18; const bx = x + 1 - (bw >> 1);
+        const cy = Math.round((yA + yB) / 2) - 18 - (g.bump[i] > 0.1 ? 2 : g.bump[i] > 0 ? 1 : 0); const bx = x + 1 - (bw >> 1);
         ctx.globalAlpha = alpha;
         ctx.fillStyle = '#4a3020'; ctx.fillRect(bx + 3, cy - 6, 1, 6); ctx.fillRect(bx + bw - 4, cy - 6, 1, 6);   // ropes
         ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(bx + 2, cy + 2, bw, bh);
@@ -693,6 +703,12 @@ export class Game {
         ctx.fillStyle = '#c9b08a'; ctx.fillRect(bx + 1, cy + 1, 1, 1); ctx.fillRect(bx + bw - 2, cy + 1, 1, 1);  // nails
         ctx.fillRect(bx + 1, cy + bh - 2, 1, 1); ctx.fillRect(bx + bw - 2, cy + bh - 2, 1, 1);
         drawText(ctx, label, x + 1, cy + 3, { align: 'center', scale: 2, color: C.text, outline: '#140c08' });
+        if (!g.done && !(gs.op === 'x' && gs.val >= 4)) {
+          // charge bar: fills as shots hit this door; when full the door improves
+          const p = Math.min(1, gs.acc / this.gateStep(g, gs)); const pw = bw - 2;
+          ctx.fillStyle = '#140c08'; ctx.fillRect(bx + 1, cy + bh + 1, pw, 3);
+          ctx.fillStyle = '#e8c85a'; ctx.fillRect(bx + 1, cy + bh + 2, Math.round((pw) * p), 1);
+        }
         if (rejected) {
           ctx.fillStyle = 'rgba(30,15,10,0.8)';
           for (let k = -7; k <= 7; k++) { ctx.fillRect(x + 1 + k, cy + 10 + k * 0.6, 2, 2); ctx.fillRect(x + 1 + k, cy + 10 - k * 0.6, 2, 2); }

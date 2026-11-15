@@ -1,5 +1,5 @@
 // App shell: loading, screens, input, saving, loop (MIT)
-import { W, H, MAX_LEVEL, CAMP, campCost, biomeOf, FACTIONS, HEROES, MASTERY_MAX, masteryCost } from './data.js';
+import { W, DW, H, setW, MAX_LEVEL, CAMP, campCost, biomeOf, FACTIONS, HEROES, MASTERY_MAX, masteryCost } from './data.js';
 import { Game, groundTexture } from './game.js';
 import { drawText, textWidth } from './font.js';
 import { initAudio, sfx, setSfx, setMusic, playMusic } from './audio.js';
@@ -144,13 +144,13 @@ class App {
 
   // ----- title -----
   buildTitle() {
-    const cx = W / 2;
+    const cx = DW / 2;
     const chip = (x, label, on, fn) => new Button(x, H - 20, 36, 16, label, fn, { kind: 'tile', ink: on ? INK : INK_SOFT });
     this.buttons = [
       new Button(cx - 70, 112, 140, 22, 'PLAY', () => this.go('slots'), { style: 'go', scale: 1 }),
-      chip(W - 118, this.settings.sfx ? 'SFX' : 'sfx', this.settings.sfx, () => this.toggle('sfx')),
-      chip(W - 79, this.settings.music ? 'MUS' : 'mus', this.settings.music, () => this.toggle('music')),
-      new Button(W - 40, H - 20, 38, 16, { auto: 'AUTO', paper: 'LITE', dark: 'DARK' }[this.settings.theme], () => {
+      chip(DW - 118, this.settings.sfx ? 'SFX' : 'sfx', this.settings.sfx, () => this.toggle('sfx')),
+      chip(DW - 79, this.settings.music ? 'MUS' : 'mus', this.settings.music, () => this.toggle('music')),
+      new Button(DW - 40, H - 20, 38, 16, { auto: 'AUTO', paper: 'LITE', dark: 'DARK' }[this.settings.theme], () => {
         this.settings.theme = { auto: 'paper', paper: 'dark', dark: 'auto' }[this.settings.theme]; this.persistSettings(); this.go('title');
       }, { kind: 'tile' }),
     ];
@@ -262,8 +262,8 @@ class App {
         } }));
     }
     b.push(new Button(4, H - 26, 76, 22, '< CAMP', () => this.go('camp')));
-    if (p > 0) b.push(new Button(W / 2 - 100, H - 26, 64, 22, '< PREV', () => { this.page--; this.go('levels'); }));
-    if (p < 4) b.push(new Button(W / 2 + 36, H - 26, 64, 22, 'NEXT >', () => { this.page++; this.go('levels'); }, { disabled: (p + 1) * 20 + 1 > this.save.unlocked }));
+    if (p > 0) b.push(new Button(DW / 2 - 100, H - 26, 64, 22, '< PREV', () => { this.page--; this.go('levels'); }));
+    if (p < 4) b.push(new Button(DW / 2 + 36, H - 26, 64, 22, 'NEXT >', () => { this.page++; this.go('levels'); }, { disabled: (p + 1) * 20 + 1 > this.save.unlocked }));
     this.buttons = b;
   }
 
@@ -333,7 +333,7 @@ class App {
   }
   showResults() {
     if (this.screen !== 'game') return;
-    this.overlay = 'results'; const r = this.result; const cx = W / 2;
+    this.overlay = 'results'; const r = this.result; const cx = DW / 2;
     const b = [];
     if (r.endless) b.push(new Button(cx - 112, 168, 104, 22, 'AGAIN', () => this.startGame({ endless: true }), { style: 'go' }));
     else if (r.won && r.level < MAX_LEVEL) b.push(new Button(cx - 112, 168, 104, 22, 'NEXT', () => this.startGame({ level: r.level + 1 }), { style: 'go' }));
@@ -344,7 +344,7 @@ class App {
   }
   pause() {
     if (this.screen !== 'game' || this.overlay || !this.game || this.game.state !== 'play') return;
-    this.overlay = 'pause'; const cx = W / 2;
+    this.overlay = 'pause'; const cx = DW / 2;
     this.buttons = [
       new Button(cx - 60, 82, 120, 22, 'RESUME', () => { this.overlay = null; this.buttons = []; }, { style: 'go' }),
       new Button(cx - 60, 108, 120, 22, 'RESTART', () => this.startGame(this.lastOpts)),
@@ -355,7 +355,12 @@ class App {
   // ----- input -----
   toLogical(e) {
     const r = this.canvas.getBoundingClientRect();
-    return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H];
+    const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+    // menus and in-game overlays live in a DW-wide design space centred on the screen
+    return [this.inDesignSpace() ? x - this.ox : x, y];
+  }
+  get ox() { return Math.floor((W - DW) / 2); }
+  inDesignSpace() { return this.screen !== 'game' || !!this.overlay;
   }
   bindInput() {
     const c = this.canvas;
@@ -365,7 +370,7 @@ class App {
       const [x, y] = this.toLogical(e);
       this.pressBtn = [...this.buttons].reverse().find(b => b.hit(x, y) && !b.disabled) || null;
       if (!this.pressBtn && this.screen === 'game' && !this.overlay) {
-        if (x > W - 22 && y < 16) { this.pause(); return; }
+        if (x > DW - 22 && y < 16) { this.pause(); return; }
         this.drag = { y, id: e.pointerId };
       }
     });
@@ -424,25 +429,26 @@ class App {
       ctx.fillStyle = '#4a3420'; ctx.fillRect(W / 2 - 60, H / 2 + 2, 120, 6); ctx.fillStyle = '#e8a020'; ctx.fillRect(W / 2 - 60, H / 2 + 2, 120 * this.progress, 6);
       return;
     }
+    if (this.screen === 'game') this.game.draw(ctx); else this.drawMenuBackdrop(ctx);
+    ctx.save(); if (this.inDesignSpace()) ctx.translate(this.ox, 0);
     if (this.screen === 'game') {
-      this.game.draw(ctx);
       if (this.overlay === 'pause') {
-        ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
-        panel(ctx, W / 2 - 84, 44, 168, 122);
-        ribbon(ctx, 'PAUSED', W / 2, 52, 1);
+        ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(-this.ox, 0, W, H);
+        panel(ctx, DW / 2 - 84, 44, 168, 122);
+        ribbon(ctx, 'PAUSED', DW / 2, 52, 1);
       } else if (this.overlay === 'results') this.drawResults(ctx);
       else if (this.overlay === 'draft') {
-        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-        ribbon(ctx, 'CHOOSE A BOON', W / 2, 40, 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(-this.ox, 0, W, H);
+        ribbon(ctx, 'CHOOSE A BOON', DW / 2, 40, 2);
       }
     } else {
-      this.drawMenuBackdrop(ctx);
-      const d = { title: () => this.drawTitle(ctx), slots: () => ribbon(ctx, 'CHOOSE A SAVE', W / 2, 10, 2),
-        faction: () => ribbon(ctx, 'CHOOSE YOUR SIDE', W / 2, 8, 2), heroes: () => this.drawHeroesHead(ctx),
+      const d = { title: () => this.drawTitle(ctx), slots: () => ribbon(ctx, 'CHOOSE A SAVE', DW / 2, 10, 2),
+        faction: () => ribbon(ctx, 'CHOOSE YOUR SIDE', DW / 2, 8, 2), heroes: () => this.drawHeroesHead(ctx),
         levels: () => this.drawLevels(ctx), camp: () => this.drawCamp(ctx) }[this.screen];
       if (d) d();
     }
     for (const b of this.buttons) b.draw(ctx, this);
+    ctx.restore();
   }
 
   // draw a character sheet frame with feet at (x, y)
@@ -470,62 +476,73 @@ class App {
   drawTitle(ctx) {
     this.applyTheme();
     for (let i = 0; i < 6; i++) this.drawChar(ctx, ['archer', 'lancer', 'wizard'][i % 3], 'walk', 22 + (i % 3) * 14 + (i > 2 ? 7 : 0), 186 + (i > 2 ? 12 : 0), { phase: i * 2 });
-    for (let i = 0; i < 6; i++) this.drawChar(ctx, ['orc', 'skeleton_archer', 'necromancer'][i % 3], 'walk', W - 26 - (i % 3) * 16 - (i > 2 ? 8 : 0), 186 + (i > 2 ? 12 : 0), { flip: true, phase: i * 3 });
+    for (let i = 0; i < 6; i++) this.drawChar(ctx, ['orc', 'skeleton_archer', 'necromancer'][i % 3], 'walk', DW - 26 - (i % 3) * 16 - (i > 2 ? 8 : 0), 186 + (i > 2 ? 12 : 0), { flip: true, phase: i * 3 });
     const bob = Math.round(Math.sin(this.t * 2) * 2);
-    panel(ctx, W / 2 - 122, 6 + bob, 244, 96, { ornate: true });
-    drawText(ctx, 'GO FORTH', W / 2, 16 + bob, { align: 'center', scale: 3, color: INK, outline: null });
-    drawText(ctx, 'AND', W / 2, 41 + bob, { align: 'center', scale: 2, color: INK_SOFT, outline: null });
-    drawText(ctx, 'BREAK THINGS', W / 2, 58 + bob, { align: 'center', scale: 3, color: PAL.accent, outline: null });
-    drawText(ctx, 'US OR THEM? PICK A SIDE.', W / 2, 84 + bob, { align: 'center', color: INK_SOFT, outline: null });
-    drawText(ctx, 'UI', W - 52, H - 15, { align: 'right', color: '#fff', outline: '#000' });
+    panel(ctx, DW / 2 - 122, 6 + bob, 244, 96, { ornate: true });
+    drawText(ctx, 'GO FORTH', DW / 2, 16 + bob, { align: 'center', scale: 3, color: INK, outline: null });
+    drawText(ctx, 'AND', DW / 2, 41 + bob, { align: 'center', scale: 2, color: INK_SOFT, outline: null });
+    drawText(ctx, 'BREAK THINGS', DW / 2, 58 + bob, { align: 'center', scale: 3, color: PAL.accent, outline: null });
+    drawText(ctx, 'US OR THEM? PICK A SIDE.', DW / 2, 84 + bob, { align: 'center', color: INK_SOFT, outline: null });
+    drawText(ctx, 'UI', DW - 52, H - 15, { align: 'right', color: '#fff', outline: '#000' });
   }
   drawHeroesHead(ctx) {
-    ribbon(ctx, 'CHAMPIONS', W / 2, 6, 2);
-    this.coinBadge(ctx, W - 76, 8, this.save.coins);
+    ribbon(ctx, 'CHAMPIONS', DW / 2, 6, 2);
+    this.coinBadge(ctx, DW - 76, 8, this.save.coins);
   }
   drawLevels(ctx) {
-    panel(ctx, 26, 30, W - 52, 132);
-    ribbon(ctx, this.assets.biomeSet(this.save.faction)[this.page].name.toUpperCase(), W / 2, 12, 2);
-    drawText(ctx, `LEVELS ${this.page * 20 + 1}-${this.page * 20 + 20}    B = BOSS LEVEL`, W / 2, 50, { align: 'center', color: INK_SOFT, outline: null });
-    drawText(ctx, `${this.page + 1}/5`, W / 2, H - 17, { align: 'center', color: '#fff', outline: '#000' });
+    panel(ctx, 26, 30, DW - 52, 132);
+    ribbon(ctx, this.assets.biomeSet(this.save.faction)[this.page].name.toUpperCase(), DW / 2, 12, 2);
+    drawText(ctx, `LEVELS ${this.page * 20 + 1}-${this.page * 20 + 20}    B = BOSS LEVEL`, DW / 2, 50, { align: 'center', color: INK_SOFT, outline: null });
+    drawText(ctx, `${this.page + 1}/5`, DW / 2, H - 17, { align: 'center', color: '#fff', outline: '#000' });
   }
   campAnim(ctx, k, cx, bottom, phase = 0) {
     const m = this.assets.manifest.campAnim[k]; const img = this.assets.campAnim[k];
     const f = Math.floor(this.t * 10 + phase) % m.n;
     ctx.drawImage(img, f * m.fw, 0, m.fw, m.fh, Math.round(cx - m.fw / 2), Math.round(bottom - m.fh), m.fw, m.fh);
   }
+  // soft fire glow: concentric dithered ellipses (pixel-art friendly), cached per colour/size/flicker step
+  glow(ctx, cx, cy, rx, ry, rgb) {
+    this.glowCache = this.glowCache || {};
+    const f = Math.floor(this.t * 6) % 3; const k = `${rgb}|${rx}|${ry}|${f}`;
+    let c = this.glowCache[k];
+    if (!c) {
+      const grow = [0, 1, -1][f]; const RX = rx + grow, RY = ry + grow;
+      c = document.createElement('canvas'); c.width = RX * 2 + 2; c.height = RY * 2 + 2; const g = c.getContext('2d');
+      for (let y = -RY; y <= RY; y++) for (let x = -RX; x <= RX; x++) {
+        const d = (x * x) / (RX * RX) + (y * y) / (RY * RY); if (d > 1) continue;
+        const band = d < 0.18 ? 3 : d < 0.45 ? 2 : d < 0.75 ? 1 : 0;
+        if (band === 0 && (x + y) & 1) continue;        // outer ring dithered 50%
+        if (band === 1 && ((x & 1) && (y & 1))) continue; // middle ring dithered 75%
+        g.fillStyle = `rgba(${rgb},${[0.13, 0.18, 0.24, 0.30][band]})`; g.fillRect(x + RX + 1, y + RY + 1, 1, 1);
+      }
+      this.glowCache[k] = c;
+    }
+    ctx.drawImage(c, Math.round(cx - c.width / 2), Math.round(cy - c.height / 2));
+  }
   drawCamp(ctx) {
     const A = this.assets; const t = this.t; const them = this.save.faction === 'them';
     const C = (k, x, bottom) => { const im = A.camp[k]; ctx.drawImage(im, Math.round(x), Math.round(bottom - im.height)); };
     const hero = this.hero();
+    const wander = (k, x, y, i, span = 14) => {
+      const ph = (t * 0.2 + i * 0.37) % 2; const walking = (ph % 1) < 0.4; const pos = Math.min(1, (ph % 1) / 0.4); const dir = ph < 1 ? 1 : -1;
+      this.drawChar(ctx, k, walking ? 'walk' : 'idle', x + (dir > 0 ? pos : 1 - pos) * span - span / 2, y, { flip: walking ? dir < 0 : i % 2 === 1, phase: i });
+    };
     if (!them) {
-      ctx.fillStyle = 'rgba(60,25,0,0.22)'; ctx.fillRect(0, 0, W, H);
-      C('officer_tent_0', 104, 186); C('bell_tent_0', 0, 176); C('tent_1', 48, 182);
-      this.campAnim(ctx, 'flag_0', 96, 160);
-      C('archery_target_0', 156, 212); C('barrels_0', 0, 216); C('supply_crates_0', 24, 216);
-      C('weapon_rack_0', 128, 214);
-      const glow = 0.16 + 0.05 * Math.sin(t * 9); ctx.fillStyle = `rgba(255,170,60,${glow})`; ctx.fillRect(66, 178, 56, 34);
-      this.campAnim(ctx, 'campfire_0', 94, 208);
-      this.drawChar(ctx, 'archer', 'atk1', 120, 204, { speed: 9 });
-      const V = ['v_villagerman', 'v_villagerwoman', 'v_oldman', 'v_noblewoman', 'v_peasant'];
-      V.forEach((k, i) => {
-        const homeX = [52, 74, 112, 66, 92][i], y = [198, 212, 210, 190, 196][i];
-        const ph = (t * 0.2 + i * 0.31) % 2; const walking = (ph % 1) < 0.4; const pos = Math.min(1, (ph % 1) / 0.4); const dir = ph < 1 ? 1 : -1;
-        this.drawChar(ctx, k, walking ? 'walk' : 'idle', homeX + (dir > 0 ? pos : 1 - pos) * 14 - 7, y, { flip: walking ? dir < 0 : i % 2 === 1, phase: i });
-      });
-      this.drawChar(ctx, 'soldier', 'idle', 176, 200, { flip: true });
+      // Realm base camp: two tents, a practice target, the campfire and a couple of villagers
+      C('officer_tent_0', 104, 188); C('bell_tent_0', 6, 180);
+      C('archery_target_0', 160, 212);
+      this.glow(ctx, 92, 198, 30, 17, '255,180,80');
+      this.campAnim(ctx, 'campfire_0', 92, 208);
+      this.drawChar(ctx, 'archer', 'atk1', 126, 206, { speed: 9 });
+      wander('v_villagerman', 60, 202, 0); wander('v_oldwoman', 116, 214, 1);
     } else {
-      // war camp: palisade, hide tents, roasting boar, braziers, trophies
-      for (let x = 0; x < 190; x += 7) { const h = 30 + ((x * 7) % 11); ctx.fillStyle = '#3a2418'; ctx.fillRect(x, 156 - h, 6, h); ctx.fillStyle = '#5a3a24'; ctx.fillRect(x + 1, 156 - h, 2, h); ctx.fillStyle = '#2a180e'; ctx.fillRect(x + 2, 156 - h - 3, 2, 3); }
-      C('yurt_1', 104, 184); C('tepee_painted_0', 2, 178); C('tepee_painted_1', 44, 186);
-      this.campAnim(ctx, 'brazier_stand_1', 12, 214, 2); this.campAnim(ctx, 'brazier_stand_1', 178, 214, 5);
-      C('trophy_rack_1', 120, 214); C('hide_frame_0', 26, 212); C('log_pile_axe_0', 150, 210);
-      const glow = 0.16 + 0.05 * Math.sin(t * 9); ctx.fillStyle = `rgba(255,90,40,${glow})`; ctx.fillRect(64, 176, 60, 36);
-      this.campAnim(ctx, 'spit_roast_boar_0', 94, 210);
-      [['orc', 52, 200], ['skeleton', 74, 214], ['demon', 116, 204], ['skeleton_archer', 136, 198], ['werewolf', 160, 210]].forEach(([k, x, y], i) => {
-        const ph = (t * 0.25 + i * 0.4) % 2; const walking = (ph % 1) < 0.3; const pos = Math.min(1, (ph % 1) / 0.3); const dir = ph < 1 ? 1 : -1;
-        this.drawChar(ctx, k, walking ? 'walk' : 'idle', x + (dir > 0 ? pos : 1 - pos) * 12 - 6, y, { flip: walking ? dir < 0 : i % 2 === 0, phase: i });
-      });
+      // Horde war camp: palisade, yurt + tepee, roasting boar, one brazier and a couple of brutes
+      for (let x = 0; x < 190; x += 7) { const h = 24 + ((x * 7) % 9); ctx.fillStyle = '#3a2418'; ctx.fillRect(x, 154 - h, 6, h); ctx.fillStyle = '#5a3a24'; ctx.fillRect(x + 1, 154 - h, 2, h); ctx.fillStyle = '#2a180e'; ctx.fillRect(x + 2, 154 - h - 3, 2, 3); }
+      C('yurt_1', 104, 186); C('tepee_painted_0', 8, 182);
+      this.glow(ctx, 172, 192, 16, 12, '255,120,50'); this.campAnim(ctx, 'brazier_stand_1', 172, 214, 2);
+      this.glow(ctx, 92, 198, 30, 17, '255,110,50');
+      this.campAnim(ctx, 'spit_roast_boar_0', 92, 210);
+      wander('orc', 58, 202, 0); wander('skeleton', 132, 212, 1);
     }
     this.drawChar(ctx, hero.sheet, 'idle', 22, 214, {});  // your current champion
     // ledger
@@ -544,18 +561,18 @@ class App {
   }
   drawResults(ctx) {
     const r = this.result;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-    panel(ctx, W / 2 - 124, 30, 248, 166);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(-this.ox, 0, W, H);
+    panel(ctx, DW / 2 - 124, 30, 248, 166);
     const title = r.endless ? 'OVERRUN!' : r.won ? 'VICTORY!' : 'DEFEAT';
-    ribbon(ctx, title, W / 2, 20, 2);
-    if (r.won && !r.endless) for (let s = 0; s < 3; s++) drawStar(ctx, W / 2 - 34 + s * 24, 52, s < r.stars);
+    ribbon(ctx, title, DW / 2, 20, 2);
+    if (r.won && !r.endless) for (let s = 0; s < 3; s++) drawStar(ctx, DW / 2 - 34 + s * 24, 52, s < r.stars);
     let y = r.won && !r.endless ? 80 : 58;
-    const line = (t, c = INK) => { drawText(ctx, t, W / 2, y, { align: 'center', color: c, outline: null }); y += 12; };
+    const line = (t, c = INK) => { drawText(ctx, t, DW / 2, y, { align: 'center', color: c, outline: null }); y += 12; };
     if (r.endless) { line(`WAVES SURVIVED: ${r.wave}`); line(`BEST: ${this.save.bestEndless}`, PAL.accent); }
     else line(`LEVEL ${r.level}  ${r.won ? 'CLEARED' : `FELL ON WAVE ${Math.min(3, r.waveReached + 1)}/3`}`);
     line(`ENEMIES SLAIN: ${r.kills}`, INK_SOFT);
-    ctx.drawImage(this.assets.icons.coin, W / 2 - 34, y - 3, 12, 12);
-    drawText(ctx, `+${r.coins} KEPT`, W / 2 - 18, y, { color: PAL.gold, outline: null }); y += 16;
+    ctx.drawImage(this.assets.icons.coin, DW / 2 - 34, y - 3, 12, 12);
+    drawText(ctx, `+${r.coins} KEPT`, DW / 2 - 18, y, { color: PAL.gold, outline: null }); y += 16;
     if (!r.won) {
       const best = this.cheapestUpgrade();
       line('YOUR COINS ARE SAFE. UPGRADE AT CAMP', INK_SOFT);
@@ -570,13 +587,20 @@ class App {
 }
 
 // ---------------- boot ----------------
+// Fill the screen: height is always 216 logical px; width follows the aspect ratio (clamped 384..520).
+// Very tall/narrow screens (4:3 tablets, portrait phones) letterbox instead.
 const canvas = document.getElementById('game');
-canvas.width = W; canvas.height = H;
+let app = null;
 function fit() {
-  const s = Math.min(innerWidth / W, innerHeight / H);
-  const k = s >= 1 ? Math.floor(s * 4) / 4 : s;
-  canvas.style.width = Math.floor(W * k) + 'px'; canvas.style.height = Math.floor(H * k) + 'px';
+  const aspect = innerWidth / innerHeight;
+  const w = Math.max(DW, Math.min(520, Math.round(H * aspect / 2) * 2));
+  if (w !== canvas.width || canvas.height !== H) {
+    setW(w); canvas.width = w; canvas.height = H;
+    if (app && app.ctx) { app.ctx.imageSmoothingEnabled = false; if (app.screen !== 'loading' && app.screen !== 'game') app.go(app.screen); }
+  }
+  const k = Math.min(innerWidth / w, innerHeight / H);
+  canvas.style.width = Math.floor(w * k) + 'px'; canvas.style.height = Math.floor(H * k) + 'px';
   document.getElementById('rotate').style.display = innerHeight > innerWidth * 1.1 ? 'flex' : 'none';
 }
 addEventListener('resize', fit); fit();
-new App(canvas).start();
+app = new App(canvas); app.start();
