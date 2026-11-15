@@ -2,7 +2,7 @@
 # run tools/unpack_art.py downloads art, then tools/build_assets.py art game.
 downloads/
 art/
-game/assets/
+game/assets
 dist/
 icons/
 node_modules/

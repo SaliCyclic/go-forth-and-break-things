@@ -625,43 +625,80 @@ export class Game {
     ctx.fillStyle = 'rgba(0,0,0,0.08)'; ctx.fillRect(0, LANE_T - 14, W, H);
   }
 
+  // ---- gates: carved stone posts + dithered rune curtain + hanging wooden sign ----
+  drawGatePost(ctx, x, foot, crystal, glow) {
+    // 8px carved stone post standing on the ground line, rune crystal on top
+    const h = 30, top = foot - h;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(x - 6, foot - 1, 13, 3);
+    ctx.fillStyle = '#3c3530'; ctx.fillRect(x - 4, top, 9, h);           // outline
+    ctx.fillStyle = '#8a8178'; ctx.fillRect(x - 3, top + 1, 7, h - 2);    // stone
+    ctx.fillStyle = '#a89e92'; ctx.fillRect(x - 3, top + 1, 2, h - 2);    // lit edge
+    ctx.fillStyle = '#625a52'; ctx.fillRect(x + 2, top + 1, 2, h - 2);    // shade
+    for (let k = 6; k < h - 4; k += 7) { ctx.fillStyle = '#625a52'; ctx.fillRect(x - 3, top + k, 7, 1); }
+    ctx.fillStyle = crystal; ctx.fillRect(x - 1, top + 9, 3, 3);           // carved rune
+    ctx.fillStyle = '#3c3530'; ctx.fillRect(x - 5, top - 2, 11, 4);       // cap stone
+    ctx.fillStyle = '#9a9086'; ctx.fillRect(x - 4, top - 1, 9, 2);
+    // crystal
+    ctx.fillStyle = glow; ctx.fillRect(x - 3, top - 10, 7, 9);
+    ctx.fillStyle = '#20202a'; ctx.fillRect(x - 1, top - 9, 3, 1); ctx.fillRect(x - 2, top - 8, 5, 5); ctx.fillRect(x - 1, top - 3, 3, 1);
+    ctx.fillStyle = crystal; ctx.fillRect(x - 1, top - 8, 3, 5); ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, top - 8, 1, 2);
+  }
   drawGate(ctx, g, pass) {
-    // pass 0: back post + panels; pass 1: labels on top
+    // pass 0: posts + curtains (behind units); pass 1: signs (on top)
     const x = Math.round(g.x);
+    const COL = { good: { crystal: '#8fe8ff', glow: 'rgba(120,220,255,0.35)', a: '#5fcde4', b: '#2f6f9a', text: '#dff7ff', board: '#1f4f78' },
+                  bad:  { crystal: '#ff8f8f', glow: 'rgba(255,110,110,0.35)', a: '#e8606a', b: '#8a2532', text: '#ffe0e0', board: '#6a1a24' } };
+    const posts = [LANE_T - 6, LANE_MID, LANE_B + 3];
     if (pass === 0) {
-      // solid divider post: you go through one door or the other, never both
-      ctx.fillStyle = '#3b3030'; ctx.fillRect(x - 3, LANE_T - 26, 8, LANE_B - LANE_T + 32);
-      ctx.fillStyle = '#8a7a6a'; ctx.fillRect(x - 2, LANE_T - 26, 6, LANE_B - LANE_T + 32);
-      ctx.fillStyle = '#b8a890'; ctx.fillRect(x - 2, LANE_T - 26, 2, LANE_B - LANE_T + 32);
-      ctx.fillStyle = '#e8c85a'; ctx.fillRect(x - 4, LANE_T - 30, 10, 5);
+      const lc = (i) => (g.sides[i].op === '+' || g.sides[i].op === 'x') ? COL.good : COL.bad;
+      this.drawGatePost(ctx, x + 1, posts[0], lc(0).crystal, lc(0).glow);
+      const mid = Math.floor(this.t * 4) % 2 ? lc(0) : lc(1);
+      this.drawGatePost(ctx, x + 1, posts[1], mid.crystal, mid.glow);
+      this.drawGatePost(ctx, x + 1, posts[2], lc(1).crystal, lc(1).glow);
     }
     for (let i = 0; i < 2; i++) {
-      const gs = g.sides[i];
-      const y0 = i === 0 ? LANE_T - 22 : LANE_MID + 1, y1 = i === 0 ? LANE_MID - 1 : LANE_B + 4;
-      const good = gs.op === '+' || gs.op === 'x';
-      let alpha = 1;
-      if (g.done) alpha = g.chosen === i ? Math.max(0, 1 - g.passT * 2) : 0.35;
+      const gs = g.sides[i]; const good = gs.op === '+' || gs.op === 'x'; const C = good ? COL.good : COL.bad;
+      const yA = posts[i], yB = posts[i + 1];
       const committed = !g.done && g.lock !== undefined && (this.sy < LANE_MID ? 0 : 1) !== i;
-      if (committed) alpha = 0.55;
-      ctx.globalAlpha = alpha;
+      const rejected = (g.done && g.chosen !== i) || committed;
+      let alpha = 1; if (g.done) alpha = g.chosen === i ? Math.max(0, 1 - g.passT * 2) : 0.6;
       if (pass === 0) {
-        ctx.fillStyle = good ? 'rgba(40,150,255,0.42)' : 'rgba(230,40,60,0.42)';
-        if (g.flash[i] > 0) ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillRect(x - 9, y0, 20, y1 - y0);
-        ctx.fillStyle = good ? '#9fd8ff' : '#ff9aa4';
-        ctx.fillRect(x - 9, y0, 20, 2); ctx.fillRect(x - 9, y1 - 2, 20, 2); ctx.fillRect(x - 9, y0, 2, y1 - y0); ctx.fillRect(x + 9, y0, 2, y1 - y0);
-      } else {
-        const label = gs.op === '/' ? `÷${gs.val}` : gs.op === '+' ? `+${gs.val + this.gateBonus}` : `${gs.op}${gs.val}`;
-        const tw = label.length * 12 + 4, cy = Math.round((y0 + y1) / 2);
-        ctx.fillStyle = good ? '#1d4f9a' : '#8a1a2a'; ctx.fillRect(x + 1 - (tw >> 1) - 2, cy - 10, tw + 4, 20);
-        ctx.fillStyle = good ? '#9fd8ff' : '#ff9aa4'; ctx.fillRect(x + 1 - (tw >> 1) - 2, cy - 10, tw + 4, 1); ctx.fillRect(x + 1 - (tw >> 1) - 2, cy + 9, tw + 4, 1);
-        drawText(ctx, label, x + 1, cy - 7, { align: 'center', scale: 2, color: '#fff', outline: null });
-        if ((g.done && g.chosen !== i) || committed) {
-          ctx.fillStyle = 'rgba(20,10,10,0.7)';
-          for (let k = -8; k <= 8; k++) { ctx.fillRect(x + 1 + k, cy + k, 2, 2); ctx.fillRect(x + 1 + k, cy - k, 2, 2); }
+        // curtain: a standing sheet of runes between the two posts (rises ~26px above the ground line)
+        const top = yA - 26, bot = yB - 2, cw = 16, x0 = x - 7;
+        ctx.globalAlpha = rejected ? 0.3 * alpha : alpha;
+        const ph = Math.floor(this.t * 12);
+        for (let yy = top; yy < bot; yy++) for (let xx = 0; xx < cw; xx++) {
+          const band = (yy + ph) % 6; if (((xx + yy + ph) & 1) === 0 && band > 1) continue;   // dither with brighter bands crawling upward
+          const edge = xx === 0 || xx === cw - 1;
+          const sparkle = ((yy * 7 + xx * 13 + ph * 3) % 23) === 0;
+          ctx.fillStyle = g.flash[i] > 0 || sparkle ? '#ffffff' : edge || band <= 1 ? C.a : C.b;
+          ctx.fillRect(x0 + xx, yy, 1, 1);
         }
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = 'rgba(0,0,0,0.2)'; ctx.fillRect(x0 - 1, bot, cw + 2, 2);
+        ctx.globalAlpha = 1;
+      } else {
+        // hanging wooden sign with the value, roped to the curtain top
+        const label = gs.op === '/' ? `÷${gs.val}` : gs.op === '+' ? `+${gs.val + this.gateBonus}` : `${gs.op}${gs.val}`;
+        const tw = label.length * 12; const bw = tw + 8, bh = 20;
+        const cy = Math.round((yA + yB) / 2) - 18; const bx = x + 1 - (bw >> 1);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#4a3020'; ctx.fillRect(bx + 3, cy - 6, 1, 6); ctx.fillRect(bx + bw - 4, cy - 6, 1, 6);   // ropes
+        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(bx + 2, cy + 2, bw, bh);
+        ctx.fillStyle = '#2a1a10'; ctx.fillRect(bx - 1, cy - 1, bw + 2, bh + 2);                                  // outline
+        ctx.fillStyle = '#8a5a34'; ctx.fillRect(bx, cy, bw, bh);                                                  // planks
+        ctx.fillStyle = '#a8703f'; ctx.fillRect(bx, cy, bw, 1); ctx.fillRect(bx, cy + 10, bw, 1);
+        ctx.fillStyle = '#6a4226'; ctx.fillRect(bx, cy + 9, bw, 1); ctx.fillRect(bx, cy + bh - 1, bw, 1);
+        ctx.fillStyle = C.board; ctx.fillRect(bx + 2, cy + 2, bw - 4, bh - 4);                                  // painted face
+        ctx.fillStyle = '#c9b08a'; ctx.fillRect(bx + 1, cy + 1, 1, 1); ctx.fillRect(bx + bw - 2, cy + 1, 1, 1);  // nails
+        ctx.fillRect(bx + 1, cy + bh - 2, 1, 1); ctx.fillRect(bx + bw - 2, cy + bh - 2, 1, 1);
+        drawText(ctx, label, x + 1, cy + 3, { align: 'center', scale: 2, color: C.text, outline: '#140c08' });
+        if (rejected) {
+          ctx.fillStyle = 'rgba(30,15,10,0.8)';
+          for (let k = -7; k <= 7; k++) { ctx.fillRect(x + 1 + k, cy + 10 + k * 0.6, 2, 2); ctx.fillRect(x + 1 + k, cy + 10 - k * 0.6, 2, 2); }
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
     }
   }
 
