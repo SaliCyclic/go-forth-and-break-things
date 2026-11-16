@@ -2,6 +2,8 @@
 
 A free pixel-art game loosely inspired by those dumb mobile game ads: your squad marches across the battlefield, picks a gate (`+5`, `x2`, `-3`…), smashes crates for upgrades, and mows down the opposing forces. I've added some roguelite elements to keep things interesting, but the goal was to have a quick on the toilet or waiting for the bus game, nothing too deep.
 
+Available on Itch.io here: https://salicyclic.itch.io/go-forth-and-break-things
+
 ## Features
 
 - **Two factions:** *Us* (The Realm, humans fighting monsters) or *Them* (The Horde, monsters fighting humans). Each has its own heroes, enemies, bosses, landscapes and camp.
